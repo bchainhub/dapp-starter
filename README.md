@@ -2,59 +2,36 @@
 
 This repository ships a one-shot installer that scaffolds a SvelteKit app, adds common deps, optionally merges a template, sets up AI toolkit integration, tweaks `.gitignore`, can copy shared assets from the starter repo, sets a license, and (optionally) makes a local git commit.
 
-## 🚀 Quick start (run via curl)
+## 🚀 Quick start
 
-> **Assumes the script lives at** `https://raw.githubusercontent.com/bchainhub/sveltekit-starter/main/sv-starter.sh`.
-> If you use a different path or branch, adjust the URL accordingly.
-
-Using curl (recommended - maintains interactivity):
-
-**Option 1: jsDelivr CDN (faster, more reliable):**
+**One command (no clone):**
 
 ```bash
-bash -c "$(curl -fsSL https://cdn.jsdelivr.net/gh/bchainhub/sveltekit-starter/sv-starter.sh)"
+npx github:bchainhub/sveltekit-starter
 ```
 
-With a specific commit version:
+With a custom template:
 
 ```bash
-bash -c "$(curl -fsSL https://cdn.jsdelivr.net/gh/bchainhub/sveltekit-starter@beebeaf/sv-starter.sh)"
+npx github:bchainhub/sveltekit-starter -- --template https://github.com/your-org/your-template.git
 ```
 
-**Option 2: GitHub Raw (original):**
+**Or clone and run locally:**
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/bchainhub/sveltekit-starter/main/sv-starter.sh)"
+git clone https://github.com/bchainhub/sveltekit-starter.git
+cd sveltekit-starter
+npm install
+./sv-starter.mjs
 ```
 
-Or with a custom template repo:
-
-```bash
-bash -c "$(curl -fsSL https://cdn.jsdelivr.net/gh/bchainhub/sveltekit-starter/sv-starter.sh)" -- --template https://github.com/your-org/your-template.git
-````
-
-**wget alternative:**
-
-```bash
-bash -c "$(wget -qO- https://cdn.jsdelivr.net/gh/bchainhub/sveltekit-starter/sv-starter.sh)"
-```
-
-**Run locally (if you cloned this repo):**
-
-```bash
-chmod +x sv-starter.sh
-./sv-starter.sh --template https://github.com/blockchainhub/sveltekit-mota.git
-```
-
-> 💡 You can pass any extra flags after `--` and they will go straight to `sv create`.
-> ⚠️ **Important**: The `bash -c "$(curl ...)"` approach maintains proper terminal interactivity, unlike piping with `| bash -s --` which can break interactive prompts.
+> 💡 With `npx github:...`, use `--` before flags for `sv create` (e.g. `-- --template URL`).
 
 ## ✅ Requirements
 
 * **Node.js** 18+ (20+ recommended) and `npx`
 * **git** (for cloning templates and committing)
-* One or more package managers available (the script auto-detects): `pnpm`, `bun`, `yarn`, or `npm`
-* **curl** (and optionally `rsync` for robust folder copies)
+* One or more package managers available (the installer auto-detects): `pnpm`, `bun`, `yarn`, or `npm`
 
 ## 🖥️ Platform Support & Testing
 
@@ -66,8 +43,7 @@ chmod +x sv-starter.sh
 
 ### 🔧 Cross-Platform Features
 
-* **Shell compatibility**: Uses POSIX-compliant bash features
-* **File operations**: Cross-platform `stat` commands (macOS `-f`, Linux `-c`)
+* **Node.js**: Single `sv-starter.mjs` script with `@clack/prompts` UI
 * **Package managers**: Auto-detects npm, yarn, pnpm, bun across platforms
 * **Git operations**: Standard git commands that work everywhere
 
@@ -82,55 +58,26 @@ chmod +x sv-starter.sh
 3. **Installs base packages**
    Installs a curated set of deps for this starter.
 
-4. **Auth picker (interactive)**
-   Choose:
+4. **Translations (interactive)**
+   Choose to install `typesafe-i18n` for internationalization (default **Yes**).
 
-   * `0` None (default)
-   * `1` `@auth/sveltekit` (reminder: install your adapter)
-   * `2` `lucia` (reminder: install your adapter)
+5. **Agent Skills (interactive)** — [skills.sh](https://skills.sh/)
+   Multiselect: interactive search (`npx skills find`), Core Blockchain Skills, MOTA Skills, or add your own repo. Optionally add `.agents/` and `skills-lock.json` to `.gitignore`.
 
-   If you choose **Auth.js**, it also runs `npx auth secret`.
-
-5. **Database / data layer picker (interactive)**
-   Choose from Prisma, Drizzle ORM, Supabase, Neon, MongoDB, Redis, etc., or **None** (default).
-   Some options kick off a small init step (e.g., `prisma init`, `drizzle-kit init`).
-
-6. **Translations picker (interactive)**
-   Choose to install `typesafe-i18n` for internationalization support (default **Yes**).
-
-7. **AI Toolkit (interactive)**
-   * **AGENTS.md download** (default **Yes**):
-     Downloads the AI constitution file from `agents-sveltekit` repository and places it as `AGENTS.md` in the project root.
-   * **Spec-Kit integration** (if available):
-     * Checks if `specify` command is available on your system
-     * If found, offers to initialize Spec-Kit in the project
-     * Prompts for AI agent selection:
-       * GitHub Copilot (default)
-       * Cursor
-       * Continue.dev
-       * Other (custom input)
-     * Optionally adds `.specify/` to `.gitignore` under "# AI Agents" section (default **Yes**)
-
-8. **(Optional) Merge a template repository**
+6. **(Optional) Merge a template repository**
    By default, uses:
    `https://github.com/blockchainhub/sveltekit-mota.git`
    Override with `--template <repo-url>`.
 
    Before merging, removes `src/routes/+page.svelte` to avoid conflicts.
 
-9. **Initialize git (if needed)**
+7. **Initialize git (if needed)**
    Initializes a repository if none exists.
 
-10. **Augment `.gitignore`**
-    Appends extra ignores to the end of your existing `.gitignore`:
+8. **Augment `.gitignore`**
+   Appends extra ignores: OS cruft, logs, editor folders, addon cache, output dirs, Wrangler, migrations. **Optional:** ignore lockfiles (default **Yes**).
 
-    * OS cruft: `._*`
-    * Logs: `*.log`, `*.log.*`, tool-specific debug logs, `logs`, `*.pid`, …
-    * Editor folders: `.idea/`, `.vscode/`, etc.
-    * **Optional:** ignore lockfiles (default **Yes**). If chosen, adds common lockfiles to `.gitignore`.
-    * **Optional:** AI Agents section with `.specify/` (if Spec-Kit is included, default **Yes**)
-
-11. **(Optional) Copy shared assets from this starter repo**
+9. **(Optional) Copy shared assets from this starter repo**
 
     * **`.editorconfig`** (default **Yes**):
       Pulled from `editors/.editorconfig` and placed at project root as `.editorconfig`.
@@ -138,7 +85,7 @@ chmod +x sv-starter.sh
       Copies `providers/.github/` to your project root as `.github` (includes `ISSUE_TEMPLATE`).
       If retrieval fails, the installer **prints a failure and skips**—no fallback files.
 
-12. **License selection (interactive)**
+10. **License selection (interactive)**
     Default is **CORE** (your org's license). You can also choose from common SPDX licenses or **None**:
 
     * CORE (custom)
@@ -155,7 +102,7 @@ chmod +x sv-starter.sh
 
     > If the license text can't be fetched, the script prints an error and **does not** modify `package.json`.
 
-13. **Final (optional) local commit**
+11. **Final (optional) local commit**
     Prompt: "Create a single git commit with all current changes?" Default **Yes**.
     If **Yes**, it stages everything and commits locally.
 
@@ -168,14 +115,14 @@ chmod +x sv-starter.sh
   Example:
 
   ```bash
-  ./sv-starter.sh --template https://github.com/your-org/your-sveltekit-template.git
+  ./sv-starter.mjs --template https://github.com/your-org/your-sveltekit-template.git
   ```
 
-* Any additional arguments after `--` are forwarded to `sv create`.
+* Any additional arguments are forwarded to `sv create`.
   Example:
 
   ```bash
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/bchainhub/sveltekit-starter/main/sv-starter.sh)" -- --name my-app
+  ./sv-starter.mjs --name my-app
   ```
 
 ## 🔌 Addons (plugins)
@@ -293,30 +240,26 @@ For GitHub, `<repo>` is `owner/repo` (no `@`). The `@` prefix is only for npm-sc
 
 ## 🔐 Security note
 
-Running remote scripts is convenient but sensitive. Review the script URL before running:
+Clone the repo and review `sv-starter.mjs` before running:
 
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/bchainhub/sveltekit-starter/sv-starter.sh | less
-```
-
-Then run it once you are comfortable using:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/bchainhub/sveltekit-starter/main/sv-starter.sh)"
+git clone https://github.com/bchainhub/sveltekit-starter.git
+cd sveltekit-starter
+# review sv-starter.mjs, then:
+npm install && ./sv-starter.mjs
 ```
 
 ## 🧯 Troubleshooting
 
-* **"command not found: npx / pnpm / git / curl"**
-  Install the missing tool and rerun.
+* **"command not found: node / npx / pnpm / git"**
+  Install Node.js 18+ and the missing tool, then rerun.
 * **Template/asset copy fails**
   The script prints a ❌ message and skips that step—no fallbacks are written.
   Check the URL/branch/path and your network access.
 * **License wasn't set in `package.json`**
   This only happens if fetching the license text failed. Fix the URL/network and rerun that step, or set `license` manually.
-* **Spec-Kit not detected**
-  If Spec-Kit integration is not available, ensure `specify` command is installed and in your PATH.
-  Install from: <https://github.com/github/spec-kit>
+* **Skills or addon step fails**
+  You can run `npx skills find` or `npx skills add owner/repo` later from the project directory.
 
 ## 🧱 Reproducible asset copies (optional)
 

@@ -1,0 +1,19 @@
+{
+  "name": "sveltekit-starter",
+  "version": "1.0.0",
+  "description": "SvelteKit project starter with interactive setup",
+  "type": "module",
+  "bin": {
+    "sv-starter": "./sv-starter.mjs"
+  },
+  "scripts": {
+    "start": "node sv-starter.mjs",
+    "create": "node sv-starter.mjs"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
