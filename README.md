@@ -178,9 +178,103 @@ chmod +x sv-starter.sh
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/bchainhub/sveltekit-starter/main/sv-starter.sh)" -- --name my-app
   ```
 
+## 🔌 Addons (plugins)
+
+The installer adds an **addon** script to `package.json`. Addons are [hygen](https://www.hygen.io/)-based generators fetched from a repo (e.g. GitHub) and run in your project. They can add files, config, or run setup steps.
+
+### Install an addon
+
+```bash
+npx addon <repo> <generator> <action> [option]
+```
+
+* **&lt;repo&gt;** – Source of the addon (e.g. `bchainhub@mota-addon-corepass` or `owner/repo`).
+* **&lt;generator&gt;** – Hygen generator name (e.g. `auth`).
+* **&lt;action&gt;** – Hygen action name (e.g. `install`).
+* **\[option\]** – Optional. Use `--cache` to keep templates under `.addon-cache/` so the same addon is not re-downloaded each time.
+
+**Examples:**
+
+```bash
+# Install CorePass Passkey auth addon
+npx addon bchainhub@mota-addon-corepass auth install
+
+# Same addon, cached under .addon-cache/
+npx addon bchainhub@mota-addon-corepass auth install --cache
+```
+
+### Uninstall (remove) an addon
+
+If the addon provides an **uninstall** (or **remove**) action, run it to reverse the install (e.g. remove added files and clean up):
+
+```bash
+npx addon <repo> <generator> uninstall
+```
+
+**Example:**
+
+```bash
+# Remove CorePass Passkey addon (removes files added by the addon)
+npx addon bchainhub@mota-addon-corepass auth uninstall
+```
+
+The addon repo must implement that action (e.g. `auth/uninstall/`) and use hygen to delete or revert the same files it created during install.
+
+### Create a simple addon
+
+An addon is a repo that contains [hygen](https://www.hygen.io/) generator/action folders at its root, e.g. `auth/install/` and `auth/uninstall/`. When users run the addon, that content is fetched and used locally as `_templates/auth/install`, `_templates/auth/uninstall`, and so on. In the repo you only have the generator/action paths. The layout is:
+
+```text
+<repo>/
+  <generator>/
+    <action>/
+      prompt.js          # optional: prompt for variables
+      *.ejs.t            # template files (e.g. Component.svelte.ejs.t)
+```
+
+#### 1. Repo structure example
+
+```text
+my-addon/
+  auth/
+    install/
+      auth.config.ts.ejs.t
+      +page.server.ts.ejs.t
+    uninstall/
+      cleanup.ejs.t   # or use a script that removes the same paths
+```
+
+Locally, these are used as `_templates/auth/install` and `_templates/auth/uninstall`.
+
+#### 2. Template file example
+
+In the repo: `auth/install/auth.config.ts.ejs.t`. Locally: `_templates/auth/install/auth.config.ts.ejs.t`.
+
+```text
+---
+to: src/lib/auth.config.ts
+---
+export const config = { /* ... */ };
+```
+
+#### 3. Uninstall
+
+Provide an `uninstall` action that removes the files your addon added. For example, in `auth/uninstall/` you can have a template that runs a shell script or use hygen’s ability to generate “removal” steps. A simple approach is a single template that outputs a list of paths to delete, then run that list with `rm` or a small script.
+
+#### 4. Use the addon
+
+Push the repo (e.g. to GitHub). Users install with:
+
+```bash
+npx addon owner/my-addon auth install
+npx addon owner/my-addon auth uninstall
+```
+
+For GitHub, `<repo>` is `owner/repo` (no `@`). The `@` prefix is only for npm-scoped package names (e.g. `scope@repo`), not required by GitHub.
+
 ## 📝 What to expect during prompts
 
-* **Auth:** pick none/Auth.js/Lucia.
+* **Auth:** pick none/Auth.js/Lucia. If you choose Auth.js, you are then asked whether to **install CorePass Passkey** addon (default **Yes**).
 * **DB:** pick a data layer (or None).
 * **Translations:** install typesafe-i18n (default **Yes**).
 * **AI Toolkit:**
@@ -243,7 +337,7 @@ If you want to pin the asset copy steps to an exact commit:
 ## 📂 What gets created
 
 * A SvelteKit project with your selections.
-* `package.json` with updated dependencies and (optionally) `license`.
+* `package.json` with updated dependencies, an **addon** script for plugins (see [Addons](#-addons-plugins)), and (optionally) `license`.
 * `.gitignore` with enhanced ignores (+ optional lockfile excludes, + optional AI Agents section).
 * Optional `.editorconfig` and `.github/ISSUE_TEMPLATE` from the starter repo.
 * Optional `AGENTS.md` (AI constitution file) from agents-sveltekit repository.

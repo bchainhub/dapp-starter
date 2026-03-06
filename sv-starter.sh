@@ -2,12 +2,9 @@
 set -euo pipefail
 
 # Defensive programming: ensure all variables are properly initialized
-# This prevents "unbound variable" errors when running via bash -c
-# Using simple assignment instead of declare -g for better compatibility
 picked=""
 pkgs=""
 choice=""
-auth_choice=""
 exclude_lockfiles=""
 copy_editorconfig=""
 copy_github=""
@@ -19,8 +16,6 @@ TEMPLATE_URL="https://github.com/bchainhub/sveltekit-mota.git"
 # Starter repo (for editors/.editorconfig and providers/.github)
 STARTER_REPO_GIT="https://github.com/bchainhub/sveltekit-starter.git"
 STARTER_REPO_RAW="https://cdn.jsdelivr.net/gh/bchainhub/sveltekit-starter"
-# AI Toolkit
-AGENTS_MD_URL="https://raw.githubusercontent.com/bchainhub/agents-sveltekit/main/AGENTS.md"
 
 # ------------------ UI helpers ---------------------------------------------------
 print_section() {
@@ -37,21 +32,10 @@ print_subsection() {
   echo
 }
 
-print_success() {
-  echo "✅ $1"
-}
-
-print_info() {
-  echo "ℹ️  $1"
-}
-
-print_error() {
-  echo "❌ $1"
-}
-
-print_step() {
-  echo "→ $1"
-}
+print_success() { echo "✅ $1"; }
+print_info()    { echo "ℹ️  $1"; }
+print_error()   { echo "❌ $1"; }
+print_step()    { echo "→ $1"; }
 
 # ------------------ parse flags ----------------------------------------------
 pass_args=()
@@ -82,19 +66,15 @@ npx sv create "$@"
 echo
 print_success "SvelteKit project created!"
 echo
-read -rp "Press Enter to continue with package installation and configuration... " || true
+read -rp "Press Enter to continue with package installation and configuration… " || true
 
 # ------------------ detect the created project dir ---------------------------
 project_dir="."
 
-# Try to detect the created project directory
 if [[ -f svelte.config.js || -f svelte.config.ts ]] && [[ -f "package.json" ]]; then
-  # We're already in the project directory
   project_dir="."
 else
-  # Look for subdirectories that might contain the project
   if [[ -n "$TMP_MARKER" ]] && [[ -f "$TMP_MARKER" ]]; then
-    # Use a more portable approach instead of mapfile
     candidates=()
     while IFS= read -r -d '' dir; do
       if [[ -f "$dir/package.json" ]] && [[ -f "$dir/svelte.config.js" || -f "$dir/svelte.config.ts" ]]; then
@@ -103,17 +83,13 @@ else
     done < <(find . -maxdepth 1 -mindepth 1 -type d -newer "$TMP_MARKER" -print0 2>/dev/null || true)
 
     if [[ ${#candidates[@]} -gt 0 ]]; then
-      # Sort by modification time (newest first)
       newest_time=0
       for dir in "${candidates[@]}"; do
         if [[ -d "$dir" ]]; then
-          # Cross-platform stat command for modification time
           mod_time="0"
           if stat -f "%m" "$dir" >/dev/null 2>&1; then
-            # macOS/BSD
             mod_time=$(stat -f "%m" "$dir" 2>/dev/null || echo "0")
           elif stat -c "%Y" "$dir" >/dev/null 2>&1; then
-            # Linux
             mod_time=$(stat -c "%Y" "$dir" 2>/dev/null || echo "0")
           fi
           if [[ "$mod_time" -gt "$newest_time" ]]; then
@@ -125,7 +101,6 @@ else
     fi
   fi
 
-  # Fallback: look for any directory with package.json and svelte config
   if [[ "$project_dir" == "." ]]; then
     for dir in */; do
       if [[ -d "$dir" ]] && [[ -f "$dir/package.json" ]] && [[ -f "$dir/svelte.config.js" || -f "$dir/svelte.config.ts" ]]; then
@@ -181,149 +156,161 @@ pm_install_all() {
 }
 print_step "Using package manager: $PKG_PM"
 
+# ------------------ gitignore helper (used early) ----------------------------
+append_if_missing() {
+  local pattern="$1"
+  local file=".gitignore"
+  grep -qxF "$pattern" "$file" 2>/dev/null || echo "$pattern" >> "$file"
+}
+
+# ------------------ package.json helper --------------------------------------
+pkg_json_set_bin_and_deps() {
+  if [[ ! -f package.json ]] || ! command -v node >/dev/null 2>&1; then
+    print_info "Skipping package.json updates (package.json or node not available)."
+    return 0
+  fi
+
+  node - <<'NODE'
+const fs = require('fs');
+
+const f = 'package.json';
+const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+
+j.bin = j.bin || {};
+if (!j.bin.addon) j.bin.addon = "./bin/addon";
+
+j.devDependencies = j.devDependencies || {};
+if (!j.devDependencies.hygen) j.devDependencies.hygen = "*";
+if (!j.devDependencies.tiged) j.devDependencies.tiged = "*";
+
+fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+NODE
+}
+
 # ------------------ install base packages (non-auth) -------------------------
 print_subsection "📦 Installing Base Packages"
-print_step "Installing core dependencies..."
+print_step "Installing core dependencies…"
 pm_add @blockchainhub/blo @blockchainhub/ican @tailwindcss/vite \
        blockchain-wallet-validator device-sherlock exchange-rounding \
        lucide-svelte payto-rl tailwindcss txms.js vite-plugin-pwa
 print_success "Base packages installed"
 
-# ------------------ AUTH picker ----------------------------------------------
-print_section "🔐 Authentication Setup"
-set +u  # allow empty user input without aborting
-echo "Choose an authentication system:"
-echo "  0) None"
-echo "  1) @auth/sveltekit"
-echo "  2) Lucia (lucia)"
-read -rp "Enter a number (default 0): " auth_choice
-auth_choice="${auth_choice:-0}"
+# ------------------ Addon tooling (dev deps) ---------------------------------
+print_step "Installing addon tooling (dev): hygen + tiged"
+pm_add_dev hygen tiged
+print_success "Addon tooling installed"
 
-case "$auth_choice" in
-  1)
-    print_step "Installing @auth/sveltekit"
-    pm_add @auth/sveltekit
-    print_info "Note: you must install an adapter manually (e.g., @auth/drizzle-adapter, @auth/prisma-adapter, etc.)."
-    ;;
-  2)
-    print_step "Installing Lucia"
-    pm_add lucia
-    print_info "Note: you must install a Lucia adapter manually (e.g., @lucia-auth/adapter-<db>) and wire session storage accordingly."
-    ;;
-  *)
-    print_step "No auth package selected."
-    ;;
-esac
+# ------------------ Create bin/addon CLI (Style A) ----------------------------
+print_subsection "🧩 Addon CLI"
+mkdir -p bin
 
-# If you use Auth.js, you may also want to run:
-# npx auth secret
-if [[ "$auth_choice" == "1" ]]; then
-  print_step "Generating auth secret..."
-  npx auth secret
+cat > bin/addon <<'ADDON_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+print_error(){ echo "❌ $*" >&2; }
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  addon <repo> <generator> <action> [options]
+
+Addon options:
+  --cache        Cache fetched templates under .addon-cache/
+
+All other flags are forwarded to hygen.
+
+Examples:
+  addon bchainhub@mota-addon-corepass auth install
+  addon bchainhub@mota-addon-corepass auth install --cache
+  addon bchainhub@mota-addon-corepass auth install --dry-run
+  addon bchainhub@mota-addon-corepass auth install --cache --dry-run
+USAGE
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
 fi
-set -u  # back to strict mode
 
-# ------------------ DB picker -------------------------------------------------
-print_section "🗄️  Database & Data Layer Setup"
-set +u  # relax nounset during menu building/selection
+if [[ $# -lt 3 ]]; then
+  print_error "Missing required arguments."
+  usage
+  exit 2
+fi
 
-# Parallel arrays: names (printable) and their package strings (space-separated)
-DB_NAMES=(
-  "None"
-  "Prisma"
-  "Drizzle ORM"
-  "Neon"
-  "Supabase"
-  "Firebase"
-  "TypeORM"
-  "Kysely"
-  "Upstash Redis"
-  "Azure Tables Storage"
-  "DynamoDB"
-  "EdgeDB"
-  "Fauna"
-  "Hasura"
-  "Mikro ORM"
-  "MongoDB"
-  "Neo4j"
-  "pg"
-  "PouchDB"
-  "Sequelize"
-  "SurrealDB"
-  "Unstorage"
-  "Xata"
-)
+REPO="$1"
+GEN="$2"
+ACT="$3"
+shift 3
 
-DB_PKGS=(
-  ""                                  # None
-  "prisma @prisma/client"             # Prisma
-  "drizzle-orm drizzle-kit"           # Drizzle ORM
-  "@neondatabase/serverless"          # Neon
-  "@supabase/supabase-js"             # Supabase
-  "firebase"                          # Firebase
-  "typeorm reflect-metadata"          # TypeORM
-  "kysely"                            # Kysely
-  "@upstash/redis"                    # Upstash Redis
-  "@azure/data-tables"                # Azure Tables Storage
-  "@aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb"  # DynamoDB
-  "edgedb"                            # EdgeDB
-  "faunadb"                           # Fauna
-  "graphql-request"                   # Hasura
-  "@mikro-orm/core"                   # Mikro ORM
-  "mongodb"                           # MongoDB
-  "neo4j-driver"                      # Neo4j
-  "pg"                                # pg
-  "pouchdb"                           # PouchDB
-  "sequelize"                         # Sequelize
-  "surrealdb.js"                      # SurrealDB
-  "unstorage"                         # Unstorage
-  "@xata.io/client"                   # Xata
-)
+CACHE=0
+FORWARD_ARGS=()
 
-echo
-echo "Choose a database / data layer to install:"
-
-# Display options
-for (( i=0; i<${#DB_NAMES[@]}; i++ )); do
-  printf " %2d) %s\n" "$i" "${DB_NAMES[$i]}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cache)
+      CACHE=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      FORWARD_ARGS+=("$1")
+      shift
+      ;;
+  esac
 done
 
-# Get user choice with proper error handling
-read -rp "Enter a number (default 0 for None): " choice
-choice="${choice:-0}"
+CACHE_ROOT=".addon-cache"
+KEY="$(printf "%s" "$REPO/$GEN/$ACT" | sed 's#[^A-Za-z0-9._-]#_#g')"
 
-# Validate choice and install if valid
-if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 0 && choice < ${#DB_NAMES[@]} )); then
-  picked="${DB_NAMES[$choice]}"
-  pkgs="${DB_PKGS[$choice]}"
-
-  if [[ -n "$pkgs" && "$picked" != "None" ]]; then
-    print_step "Installing ${picked}: ${pkgs}"
-    # shellcheck disable=SC2086  # intentional word-splitting of $pkgs
-    pm_add $pkgs
-
-    case "$picked" in
-      "Prisma")
-        print_step "Initializing Prisma..."
-        npx prisma init
-        ;;
-      "Drizzle ORM")
-        print_step "Initializing Drizzle ORM..."
-        npx drizzle-kit init || true
-        ;;
-      *)
-        print_step "No special initialization needed for ${picked}"
-        ;;
-    esac
-    print_success "${picked} installed and configured"
-  else
-    print_step "No database selected."
+if [[ "$CACHE" -eq 1 ]]; then
+  TMPLS="$CACHE_ROOT/$KEY"
+  if [[ ! -d "$TMPLS/$GEN/$ACT" ]]; then
+    mkdir -p "$TMPLS"
+    if command -v tiged >/dev/null 2>&1; then
+      tiged "$REPO/$GEN/$ACT" "$TMPLS/$GEN/$ACT"
+    else
+      npx -y tiged "$REPO/$GEN/$ACT" "$TMPLS/$GEN/$ACT"
+    fi
   fi
 else
-  print_error "Invalid choice; skipping DB install."
+  TMPLS=".hygen-tmp-${GEN}-${ACT}"
+  trap 'rm -rf "$TMPLS" 2>/dev/null || true' EXIT INT TERM
+  if command -v tiged >/dev/null 2>&1; then
+    tiged "$REPO/$GEN/$ACT" "$TMPLS/$GEN/$ACT"
+  else
+    npx -y tiged "$REPO/$GEN/$ACT" "$TMPLS/$GEN/$ACT"
+  fi
 fi
 
-set -u  # restore strict mode
+if command -v hygen >/dev/null 2>&1; then
+  HYGEN_TMPLS="$TMPLS" hygen "$GEN" "$ACT" "${FORWARD_ARGS[@]}"
+else
+  HYGEN_TMPLS="$TMPLS" npx -y hygen "$GEN" "$ACT" "${FORWARD_ARGS[@]}"
+fi
+ADDON_EOF
+
+# Best-effort chmod (do not fail installer)
+if chmod +x bin/addon >/dev/null 2>&1; then
+  print_success "Created bin/addon (executable)."
+else
+  print_info "Created bin/addon but could not chmod +x (non-POSIX FS / Windows can cause this)."
+  print_info "If it doesn't run, use: bash bin/addon … or set exec bit in git."
+fi
+
+# Add root bin/ to .gitignore (as requested; /bin/ = root only)
+touch .gitignore
+append_if_missing "/bin/"
+
+# Register bin in package.json, ensure deps keys exist
+pkg_json_set_bin_and_deps
+
+# Make sure everything is installed (idempotent)
+pm_install_all
 
 # ------------------ Translations picker ----------------------------------------
 print_section "🌐 Internationalization (i18n)"
@@ -338,96 +325,107 @@ else
   print_step "Skipped translations installation"
 fi
 
-# ------------------ AI Toolkit -------------------------------------------------
-print_section "🤖 AI Toolkit"
-set +u  # allow empty user input
+# ------------------ Agent Skills (https://skills.sh / vercel-labs/skills CLI) -
+# Uses @clack/prompts UI when available (inline script); else text menu.
+print_section "🤖 Agent Skills"
+set +u
+print_info "Uses the official skills CLI (npx skills). Discover at https://skills.sh/"
 
-# Download AGENTS.md
-read -rp "Download AI constitution file (AGENTS.md) from agents-sveltekit? [Y/n]: " download_agents
-download_agents="${download_agents:-Y}"
-
-if [[ "$download_agents" =~ ^[Yy]$ ]]; then
-  print_step "Downloading AGENTS.md..."
-  if curl -fsSL "$AGENTS_MD_URL" -o AGENTS.md; then
-    print_success "AGENTS.md downloaded successfully"
-  else
-    print_error "Failed to download AGENTS.md from: $AGENTS_MD_URL"
-  fi
-else
-  print_step "Skipped AGENTS.md download"
-fi
-
-# Check for spec-kit
-print_subsection "Spec-Kit Integration"
-if command -v specify >/dev/null 2>&1; then
-  print_success "Spec-Kit found (specify command available)"
-  read -rp "Include Spec-Kit in this project? [Y/n]: " include_speckit
-  include_speckit="${include_speckit:-Y}"
-
-  if [[ "$include_speckit" =~ ^[Yy]$ ]]; then
-    print_step "Setting up Spec-Kit..."
-    # Initialize spec-kit (this creates .specify/ directory)
-    specify init || true
-    print_success "Spec-Kit initialized"
-
-    # Ask for AI agent selection
-    echo
-    echo "Select your AI agent:"
-    echo "  0) GitHub Copilot (default)"
-    echo "  1) Cursor"
-    echo "  2) Continue.dev"
-    echo "  3) Other"
-    read -rp "Enter a number (default 0): " ai_agent_choice
-    ai_agent_choice="${ai_agent_choice:-0}"
-
-    case "$ai_agent_choice" in
-      0)
-        ai_agent="GitHub Copilot"
-        ;;
-      1)
-        ai_agent="Cursor"
-        ;;
-      2)
-        ai_agent="Continue.dev"
-        ;;
-      3)
-        read -rp "Enter AI agent name: " ai_agent
-        ai_agent="${ai_agent:-Other}"
-        ;;
-      *)
-        ai_agent="GitHub Copilot"
-        ;;
-    esac
-    print_step "Selected AI agent: $ai_agent"
-
-    # Ask to add to .gitignore
-    echo
-    read -rp "Add Spec-Kit files (.specify/) to .gitignore? [Y/n]: " ignore_speckit
-    ignore_speckit="${ignore_speckit:-Y}"
-
-    if [[ "$ignore_speckit" =~ ^[Yy]$ ]]; then
-      # Ensure .gitignore exists
-      touch .gitignore
-      if ! grep -qxF "# AI Agents" .gitignore 2>/dev/null; then
-        echo >> .gitignore
-        echo "# AI Agents" >> .gitignore
-      fi
-      if ! grep -qxF ".specify/" .gitignore 2>/dev/null; then
-        echo ".specify/" >> .gitignore
-      fi
-      print_success "Added .specify/ to .gitignore"
-    else
-      print_step "Keeping Spec-Kit files tracked in git"
+skill_selections=""
+if command -v node >/dev/null 2>&1 && [[ -f package.json ]]; then
+  if pm_add_dev @clack/prompts 2>/dev/null; then
+    SKILLS_PICKER_TMP=""
+    if command -v mktemp >/dev/null 2>&1; then
+      T="$(mktemp 2>/dev/null)" && SKILLS_PICKER_TMP="${T}.mjs" || true
     fi
-  else
-    print_step "Skipped Spec-Kit integration"
+    [[ -z "$SKILLS_PICKER_TMP" ]] && SKILLS_PICKER_TMP=".sv-starter-skills-picker-$$.mjs"
+    cat <<'PICKER_END' > "$SKILLS_PICKER_TMP"
+import { intro, outro, multiselect, isCancel, cancel } from '@clack/prompts';
+intro('Agent Skills');
+const selected = await multiselect({
+  message: 'Select skills to add (space to toggle, Enter to confirm).',
+  options: [
+    { value: 'find', label: 'Interactive search (npx skills find)', hint: 'discover any skills' },
+    { value: 'core', label: 'Core Blockchain Skills (core-coin/skills)' },
+    { value: 'mota', label: 'MOTA Skills (bchainhub/mota-skills)' },
+    { value: 'custom', label: 'Add your own repo', hint: 'will prompt for owner/repo' }
+  ],
+  required: false
+});
+if (isCancel(selected)) { cancel('Skipped.'); process.exit(1); }
+outro('Done');
+console.log((selected || []).join(' '));
+PICKER_END
+    skill_selections=$(node "$SKILLS_PICKER_TMP" 2>/dev/null) || true
+    rm -f "$SKILLS_PICKER_TMP" 2>/dev/null || true
   fi
-else
-  print_info "Spec-Kit not found (specify command not available)"
-  print_info "Install Spec-Kit from: https://github.com/github/spec-kit"
 fi
 
-set -u  # restore strict mode
+if [[ -z "$skill_selections" ]]; then
+  echo
+  echo "  1) Interactive search (npx skills find) — discover and add any skills"
+  echo "  2) Add from repos — Core Blockchain, MOTA, or your own (CLI will prompt)"
+  echo "  3) Skip"
+  read -rp "Enter a number (default 3): " skill_choice
+  skill_choice="${skill_choice:-3}"
+  case "$skill_choice" in
+    1) skill_selections="find" ;;
+    2)
+      echo
+      echo "  a) Core Blockchain  b) MOTA  c) Your own repo"
+      read -rp "Enter letters (e.g. a b): " skill_letters
+      for letter in $skill_letters; do
+        case "$letter" in a|A) skill_selections="${skill_selections:+$skill_selections }core" ;; b|B) skill_selections="${skill_selections:+$skill_selections }mota" ;; c|C) skill_selections="${skill_selections:+$skill_selections }custom" ;; esac
+      done
+      ;;
+    *) skill_selections="" ;;
+  esac
+fi
+
+for sel in $skill_selections; do
+  case "$sel" in
+    find)
+      print_step "Running npx skills find (interactive search)…"
+      npx skills find || print_info "Run manually: npx skills find"
+      ;;
+    core)
+      print_step "Running npx skills add core-coin/skills…"
+      npx skills add core-coin/skills || print_info "Run later: npx skills add core-coin/skills"
+      ;;
+    mota)
+      print_step "Running npx skills add bchainhub/mota-skills…"
+      npx skills add bchainhub/mota-skills || print_info "Run later: npx skills add bchainhub/mota-skills"
+      ;;
+    custom)
+      read -rp "Repo (owner/repo or URL; empty to skip): " skill_repo
+      while [[ -n "$skill_repo" ]]; do
+        skill_repo="${skill_repo#"https://github.com/"}"
+        skill_repo="${skill_repo%.git}"
+        print_step "Running npx skills add $skill_repo…"
+        npx skills add "$skill_repo" || print_info "Run later: npx skills add $skill_repo"
+        read -rp "Another repo (empty to finish): " skill_repo
+      done
+      ;;
+  esac
+done
+
+echo
+read -rp "Add .agents/ and skills-lock.json to .gitignore? [Y/n]: " ignore_skills
+ignore_skills="${ignore_skills:-Y}"
+if [[ "$ignore_skills" =~ ^[Yy]$ ]]; then
+  touch .gitignore
+  if ! grep -qxF "# AI Agents" .gitignore 2>/dev/null; then
+    echo >> .gitignore
+    echo "# AI Agents" >> .gitignore
+  fi
+  append_if_missing "/.agents/"
+  append_if_missing "/skills-lock.json"
+  print_success "Added .agents/ and skills-lock.json to .gitignore"
+else
+  print_step "Keeping skills files tracked in git"
+fi
+
+set -u
 
 # ------------------ clone & merge template (git-clone, paste & overwrite) ---
 if [[ -n "${TEMPLATE_URL}" ]]; then
@@ -436,7 +434,6 @@ if [[ -n "${TEMPLATE_URL}" ]]; then
   TMPDIR="$(mktemp -d)"
   CLONE_DIR="${TMPDIR}/clone"
 
-  # Normalize URL (ensure it ends with .git for git clone)
   tpl_url="${TEMPLATE_URL%.git}.git"
 
   if git clone --depth=1 "$tpl_url" "$CLONE_DIR"; then
@@ -444,10 +441,6 @@ if [[ -n "${TEMPLATE_URL}" ]]; then
     rm -f "src/routes/+page.svelte"
 
     print_step "Pasting template into project (create new + overwrite existing)…"
-    # Copy EVERYTHING from the template into the current repo:
-    # - include dotfiles
-    # - exclude the template's .git and node_modules
-    # - do NOT delete files that exist only in the project
     (cd "$CLONE_DIR" && tar -cf - --exclude='.git' --exclude='node_modules' .) | tar -xf - -C .
     print_success "Template paste & overwrite complete."
   else
@@ -478,23 +471,12 @@ print_section "📝 Git Configuration"
 read -rp "Exclude lock files (package-lock.json, etc.) via .gitignore to keep repo cleaner and avoid cross-PM conflicts? [Y/n]: " exclude_lockfiles
 exclude_lockfiles="${exclude_lockfiles:-Y}"
 
-# Ensure .gitignore exists
 touch .gitignore
 
-append_if_missing() {
-  local pattern="$1"
-  local file=".gitignore"
-  grep -qxF "$pattern" "$file" 2>/dev/null || echo "$pattern" >> "$file"
-}
-
-# Append new ignores at the end if not already present
 echo >> .gitignore
 echo "# Extra ignores (added by installer)" >> .gitignore
 
-# OS
 append_if_missing "._*"
-
-# Logs
 append_if_missing "npm-debug.log*"
 append_if_missing "yarn-debug.log*"
 append_if_missing "yarn-error.log*"
@@ -509,27 +491,52 @@ append_if_missing "*.pid"
 append_if_missing "*.seed"
 append_if_missing "*.pid.lock"
 
-# Editors
-append_if_missing ".idea/"
-append_if_missing ".vscode/"
-append_if_missing ".history/"
-append_if_missing ".swp"
-append_if_missing "*.sublime-workspace"
-append_if_missing "*.sublime-project"
+echo >> .gitignore
+echo "# Editor folders" >> .gitignore
+append_if_missing "/.idea/"
+append_if_missing "/.vscode/"
+append_if_missing "/.history/"
+append_if_missing "/.swp"
+append_if_missing "/*.sublime-workspace"
+append_if_missing "/*.sublime-project"
 
-# Optionally append lockfile ignores
+echo >> .gitignore
+echo "# Addon cache" >> .gitignore
+append_if_missing "/.addon-cache/"
+append_if_missing "/.hygen-tmp-*"
+append_if_missing "/_templates/"
+
+echo >> .gitignore
+echo "# Output files" >> .gitignore
+append_if_missing "/.output/"
+append_if_missing "/.vercel/"
+append_if_missing "/.netlify/"
+append_if_missing "/.wrangler/"
+append_if_missing "/.svelte-kit/"
+append_if_missing "/build/"
+
+# Portal has default wrangler in connector, this is excluded for local development
+echo >> .gitignore
+echo "# Wrangler" >> .gitignore
+append_if_missing "/wrangler.toml"
+append_if_missing "/wrangler.jsonc"
+
+echo >> .gitignore
+echo "# Migration files" >> .gitignore
+append_if_missing "/better-auth_migrations/"
+
 case "$exclude_lockfiles" in
   [Yy]*|'')
     echo >> .gitignore
     echo "# Lock files (managed by installer)" >> .gitignore
-    append_if_missing "package-lock.json"
-    append_if_missing "pnpm-lock.yaml"
-    append_if_missing "yarn.lock"
-    append_if_missing "bun.lockb"
-    append_if_missing "npm-shrinkwrap.json"
-    append_if_missing "shrinkwrap.yaml"
-    append_if_missing ".pnp.cjs"
-    append_if_missing ".pnp.loader.mjs"
+    append_if_missing "/package-lock.json"
+    append_if_missing "/pnpm-lock.yaml"
+    append_if_missing "/yarn.lock"
+    append_if_missing "/bun.lockb"
+    append_if_missing "/npm-shrinkwrap.json"
+    append_if_missing "/shrinkwrap.yaml"
+    append_if_missing "/.pnp.cjs"
+    append_if_missing "/.pnp.loader.mjs"
     ;;
   *)
     print_step "Keeping lock files tracked."
@@ -537,8 +544,6 @@ case "$exclude_lockfiles" in
 esac
 
 # ------------------ Copy assets from starter repo (editors/providers) --------
-#   - editors/.editorconfig -> ./.editorconfig
-#   - providers/.github     -> ./.github
 print_section "📁 Project Assets"
 read -rp "Copy .editorconfig from starter repo (editors/.editorconfig)? [Y/n]: " copy_editorconfig
 copy_editorconfig="${copy_editorconfig:-Y}"
@@ -555,7 +560,6 @@ ensure_starter_clone() {
   fi
 }
 
-# Copy .editorconfig
 if [[ "$copy_editorconfig" =~ ^[Yy]$ ]]; then
   if curl -fsSL "${STARTER_REPO_RAW}/editors/.editorconfig" -o .editorconfig; then
     print_success ".editorconfig copied from editors/.editorconfig (raw)."
@@ -572,7 +576,6 @@ else
   print_step "Skipped .editorconfig copy."
 fi
 
-# Copy providers/.github into project root as .github (default NO)
 echo
 read -rp "Copy .github (providers/.github) into project root? [y/N]: " copy_github
 copy_github="${copy_github:-N}"
@@ -621,13 +624,12 @@ echo " 11) ISC"
 echo " 12) EPL-2.0"
 echo " 13) None (skip)"
 
-set +u  # interactive inputs can be empty
+set +u
 read -rp "Enter a number (default 0): " lic_choice
 lic_choice="${lic_choice:-0}"
 
 CORE_URL="https://raw.githubusercontent.com/bchainhub/core-license/refs/heads/main/LICENSE"
 
-# Bash-3.2 friendly: no associative arrays
 spdx_url_for() {
   case "$1" in
     MIT)                 echo "https://spdx.org/licenses/MIT.txt" ;;
@@ -669,7 +671,7 @@ url=""
 spdx_key=""
 
 case "$lic_choice" in
-  13) : ;;  # skip
+  13) : ;;
   0|"")  url="$CORE_URL"; license_pkg_value="SEE LICENSE IN LICENSE" ;;
   1)     spdx_key="MIT" ;;
   2)     spdx_key="Apache-2.0" ;;
@@ -705,6 +707,14 @@ if [[ -n "$license_pkg_value" ]]; then
 fi
 set -u
 
+# ------------------ Update all packages to latest (npm-check-updates) ----------
+print_step "Updating all packages to latest with npm-check-updates…"
+pm_add_dev npm-check-updates
+npx --yes npm-check-updates -u
+pm_install_all
+pm_remove npm-check-updates
+print_success "Package versions updated."
+
 # ------------------ Final optional commit & push ------------------------------
 print_section "💾 Git Commit & Push"
 read -rp "Create a single git commit with all current changes? [Y/n]: " final_commit
@@ -712,16 +722,13 @@ final_commit="${final_commit:-Y}"
 
 if [[ "$final_commit" =~ ^[Yy]$ ]]; then
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # If no commits exist yet, ensure we are on a branch (git may use default main/master)
     if ! git rev-parse HEAD >/dev/null 2>&1; then
-      # If HEAD is unborn, ensure we have a branch name; respect user's default branch config
       default_branch="$(git config --get init.defaultBranch || echo main)"
       git checkout -b "$default_branch" >/dev/null 2>&1 || true
     fi
     git add -A || true
     git commit -m "chore: initial scaffold and configuration" || print_info "Nothing to commit."
 
-    # Ask to push (default No)
     echo
     read -rp "Push this commit to origin now? [y/N]: " do_push
     do_push="${do_push:-N}"
