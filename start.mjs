@@ -92,11 +92,7 @@ function runAsync(cmd, args = [], opts = {}) {
 	});
 }
 
-const STEP_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
-function stepMsg(message) {
-	const emoji = STEP_EMOJIS[Math.floor(Math.random() * STEP_EMOJIS.length)];
-	return emoji + ' ' + message;
-}
+const SPINNER_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
 
 /**
  * Parse template URL; supports jsDelivr-style version at the end: URL@version (e.g. ...mota-dapp.git@1.2.3).
@@ -376,11 +372,11 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 		}
 	}
 
-	const s1 = spinner();
+	const s1 = spinner({ frames: SPINNER_EMOJIS, delay: 300 });
 	const { baseUrl, refFromUrl } = parseTemplateUrl(tplUrl);
 	const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 	const ref = refFromUrl ?? tplVersion ?? getDefaultBranch(tpl);
-	s1.start(stepMsg(`Cloning template (${ref})…`));
+	s1.start(`Cloning template (${ref})…`);
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-update-'));
 	const cloneDir = path.join(tmpDir, 'clone');
 	const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -393,7 +389,7 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	}
 	s1.stop('Template cloned.');
 
-	s1.start(stepMsg('Copying files (excluding vite.config.ts)…'));
+	s1.start('Copying files (excluding vite.config.ts)…');
 	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
 	if (viteBackup !== null) {
 		fs.writeFileSync(vitePath, viteBackup);
@@ -413,8 +409,8 @@ async function main() {
 
 	intro('Dapp Starter');
 
-	const s1 = spinner({ frames: ['|', '/', '-', '\\'], delay: 300 });
-	s1.start(stepMsg('Creating SvelteKit project…'));
+	const s1 = spinner({ frames: SPINNER_EMOJIS, delay: 300 });
+	s1.start('Creating SvelteKit project…');
 	const svResult = run('npx', ['sv', 'create', ...passArgs], { stdio: 'inherit' });
 	s1.stop(svResult.status === 0 ? 'SvelteKit project created.' : 'sv create finished.');
 	if (svResult.status !== 0) {
@@ -422,7 +418,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	s1.start(stepMsg('Preparing…'));
+	s1.start('Preparing…');
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
@@ -434,7 +430,7 @@ async function main() {
 	log.step(`Package manager: ${pm}`);
 	s1.stop('Ready.');
 
-	s1.start(stepMsg('Installing base packages…'));
+	s1.start('Installing base packages…');
 	await pmAddAsync(process.cwd(), pm,
 		'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
 		'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
@@ -481,7 +477,7 @@ async function main() {
 	pkg.devDependencies.prompts = pkg.devDependencies.prompts || '*';
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
-	s1.start(stepMsg('Running package install…'));
+	s1.start('Running package install…');
 	await pmInstallAsync(process.cwd(), pm);
 	s1.stop('Package install done.');
 
@@ -494,7 +490,7 @@ async function main() {
 		process.exit(0);
 	}
 	if (installTranslations) {
-		s1.start(stepMsg('Installing typesafe-i18n…'));
+		s1.start('Installing typesafe-i18n…');
 		await pmAddAsync(process.cwd(), pm, 'typesafe-i18n');
 		addScriptsToPackageJson(pkgPath, {
 			'typesafe-i18n': 'typesafe-i18n',
@@ -581,7 +577,7 @@ async function main() {
 			const { baseUrl, refFromUrl } = parseTemplateUrl(templateUrl);
 			const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 			const ref = refFromUrl ?? templateVersion ?? getDefaultBranch(tpl);
-			s1.start(stepMsg(`Cloning and merging template (${ref})…`));
+			s1.start(`Cloning and merging template (${ref})…`);
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-'));
 			const cloneDir = path.join(tmpDir, 'clone');
 			const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -935,7 +931,7 @@ async function main() {
 		}
 	}
 
-	s1.start(stepMsg('Updating packages to latest (ncu)…'));
+	s1.start('Updating packages to latest (ncu)…');
 	const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
 	const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
 	const ncuPresent = deps && 'npm-check-updates' in deps;
