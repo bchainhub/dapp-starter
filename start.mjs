@@ -4,9 +4,12 @@
  * Run: node start.mjs [--template=URL] [--template-version=REF] [args for sv create]
  * Update mode: node start.mjs --update [--template=URL] [--template-version=REF]  (overwrites from template except vite.config.ts)
  * Template version: URL can include @version (e.g. ...mota-dapp.git@1.2.3). Else use --template-version/--tv. If both omitted, uses repo default branch (git ls-remote).
+ *
+ * npm warn gitignore-fallback: We do not create .npmignore. If you see that warning, npm is using .gitignore
+ * for pack/publish exclusion; it is harmless. Add a .npmignore in the project to control published files and silence it.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -76,6 +79,19 @@ function run(cmd, args = [], opts = {}) {
 	return result;
 }
 
+/** Run a command asynchronously so the event loop (and spinner) can run. Returns Promise<{ status }>. */
+function runAsync(cmd, args = [], opts = {}) {
+	return new Promise((resolve) => {
+		const child = spawn(cmd, args, {
+			stdio: opts.stdio ?? 'pipe',
+			shell: opts.shell ?? false,
+			cwd: opts.cwd || process.cwd(),
+			...opts
+		});
+		child.on('close', (code) => resolve({ status: code ?? 0 }));
+	});
+}
+
 const STEP_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
 function stepMsg(message) {
 	const emoji = STEP_EMOJIS[Math.floor(Math.random() * STEP_EMOJIS.length)];
@@ -106,6 +122,10 @@ function runNpx(args, opts = {}) {
 	return run('npx', ['--yes', ...args], opts);
 }
 
+function runNpxAsync(args, opts = {}) {
+	return runAsync('npx', ['--yes', ...args], { ...opts, stdio: opts.stdio ?? 'pipe' });
+}
+
 function appendIfMissing(filePath, pattern) {
 	if (!fs.existsSync(filePath)) return;
 	const content = fs.readFileSync(filePath, 'utf8');
@@ -122,16 +142,6 @@ function ensureLineInFile(filePath, line) {
 	if (content.includes(line)) return;
 	const hasNewline = content.endsWith('\n');
 	fs.appendFileSync(filePath, (hasNewline ? '' : '\n') + line + '\n');
-}
-
-function ensureNpmignore(cwd) {
-	const p = path.join(cwd, '.npmignore');
-	if (fs.existsSync(p)) return;
-	const lines = [
-		'node_modules', '.git', '.env', '.env.*', '*.log', '.DS_Store',
-		'.svelte-kit', 'build', '.output', '.vercel', '.netlify', '.wrangler'
-	];
-	fs.writeFileSync(p, lines.join('\n') + '\n');
 }
 
 function addScriptsToPackageJson(pkgPath, scripts) {
@@ -288,6 +298,29 @@ function pmInstall(cwd, pm) {
 	return run('npm', ['install'], { cwd });
 }
 
+async function pmAddAsync(cwd, pm, ...pkgs) {
+	if (pkgs.length === 0) return { status: 0 };
+	if (pm === 'pnpm') return runAsync('pnpm', ['add', ...pkgs], { cwd, stdio: 'pipe' });
+	if (pm === 'yarn') return runAsync('yarn', ['add', ...pkgs], { cwd, stdio: 'pipe' });
+	if (pm === 'bun') return runAsync('bun', ['add', ...pkgs], { cwd, stdio: 'pipe' });
+	return runAsync('npm', ['i', ...pkgs], { cwd, stdio: 'pipe' });
+}
+
+async function pmAddDevAsync(cwd, pm, ...pkgs) {
+	if (pkgs.length === 0) return { status: 0 };
+	if (pm === 'pnpm') return runAsync('pnpm', ['add', '-D', ...pkgs], { cwd, stdio: 'pipe' });
+	if (pm === 'yarn') return runAsync('yarn', ['add', ...pkgs], { cwd, stdio: 'pipe' });
+	if (pm === 'bun') return runAsync('bun', ['add', '-d', ...pkgs], { cwd, stdio: 'pipe' });
+	return runAsync('npm', ['i', '-D', ...pkgs], { cwd, stdio: 'pipe' });
+}
+
+async function pmInstallAsync(cwd, pm) {
+	if (pm === 'pnpm') return runAsync('pnpm', ['install'], { cwd, stdio: 'pipe' });
+	if (pm === 'yarn') return runAsync('yarn', ['install'], { cwd, stdio: 'pipe' });
+	if (pm === 'bun') return runAsync('bun', ['install'], { cwd, stdio: 'pipe' });
+	return runAsync('npm', ['install'], { cwd, stdio: 'pipe' });
+}
+
 function getProjectDir() {
 	const cwd = process.cwd();
 	if (
@@ -393,7 +426,8 @@ async function main() {
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
-	ensureNpmignore(process.cwd());
+	// We do not create .npmignore. If you see "npm warn gitignore-fallback", npm is using .gitignore
+	// for pack/publish exclusion; the warning is harmless. Add a .npmignore yourself to control published files.
 	const npmrcPath = path.join(process.cwd(), '.npmrc');
 	if (fs.existsSync(npmrcPath)) fs.unlinkSync(npmrcPath);
 	const pm = detectPm(process.cwd());
@@ -401,12 +435,12 @@ async function main() {
 	s1.stop('Ready.');
 
 	s1.start(stepMsg('Installing base packages…'));
-	pmAdd(process.cwd(), pm,
+	await pmAddAsync(process.cwd(), pm,
 		'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
 		'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
 		'lucide-svelte', 'payto-rl', 'tailwindcss', 'txms.js', 'vite-plugin-pwa', 'zod'
 	);
-	pmAddDev(process.cwd(), pm, 'hygen', 'tiged', 'json5', 'ejs', 'prompts');
+	await pmAddDevAsync(process.cwd(), pm, 'hygen', 'tiged', 'json5', 'ejs', 'prompts');
 	s1.stop('Base packages and addon tooling installed.');
 
 	fs.mkdirSync(path.join(process.cwd(), 'bin'), { recursive: true });
@@ -448,7 +482,7 @@ async function main() {
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
 	s1.start(stepMsg('Running package install…'));
-	pmInstall(process.cwd(), pm);
+	await pmInstallAsync(process.cwd(), pm);
 	s1.stop('Package install done.');
 
 	const installTranslations = await confirm({
@@ -461,7 +495,7 @@ async function main() {
 	}
 	if (installTranslations) {
 		s1.start(stepMsg('Installing typesafe-i18n…'));
-		pmAdd(process.cwd(), pm, 'typesafe-i18n');
+		await pmAddAsync(process.cwd(), pm, 'typesafe-i18n');
 		addScriptsToPackageJson(pkgPath, {
 			'typesafe-i18n': 'typesafe-i18n',
 			'i18n:extract': 'typesafe-i18n --no-watch',
@@ -558,7 +592,7 @@ async function main() {
 				run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${projectCwd}"`], { stdio: 'pipe' });
 				templateMerged = true;
 				log.success('MOTA template merged.');
-				pmInstall(process.cwd(), pm);
+				await pmInstallAsync(process.cwd(), pm);
 			} else {
 				log.error('Failed to clone template.');
 			}
@@ -581,7 +615,7 @@ async function main() {
 		const gi = path.join(process.cwd(), '.gitignore');
 		if (!fs.existsSync(gi)) fs.writeFileSync(gi, '');
 		const extras = [
-			'', '# Extra ignores (added by installer)', '._*', 'npm-debug.log*', 'yarn-debug.log*',
+			'', '# Extra ignores', '._*', 'npm-debug.log*', 'yarn-debug.log*',
 			'yarn-error.log*', 'pnpm-debug.log*', 'pnpm-error.log*', 'bun-debug.log*', 'lerna-debug.log*',
 			'*.log', '*.log.*', 'logs', '*.pid', '*.seed', '*.pid.lock',
 			'', '# Editor folders', '/.idea/', '/.vscode/', '/.history/', '/.swp', '/*.sublime-workspace', '/*.sublime-project',
@@ -739,24 +773,25 @@ async function main() {
 		process.exit(0);
 	}
 
-	const spdxUrls = {
-		'4': 'https://spdx.org/licenses/MIT.txt',
-		'5': 'https://www.apache.org/licenses/LICENSE-2.0.txt',
-		'6': 'https://spdx.org/licenses/GPL-3.0-or-later.txt',
-		'7': 'https://spdx.org/licenses/AGPL-3.0-or-later.txt',
-		'8': 'https://spdx.org/licenses/LGPL-3.0-or-later.txt',
-		'9': 'https://spdx.org/licenses/BSD-2-Clause.txt',
-		'10': 'https://spdx.org/licenses/BSD-3-Clause.txt',
-		'11': 'https://spdx.org/licenses/MPL-2.0.txt',
-		'12': 'https://spdx.org/licenses/Unlicense.txt',
-		'13': 'https://spdx.org/licenses/CC0-1.0.txt',
-		'14': 'https://spdx.org/licenses/ISC.txt',
-		'15': 'https://spdx.org/licenses/EPL-2.0.txt'
-	};
 	const spdxKeys = {
 		'4': 'MIT', '5': 'Apache-2.0', '6': 'GPL-3.0-or-later', '7': 'AGPL-3.0-or-later',
 		'8': 'LGPL-3.0-or-later', '9': 'BSD-2-Clause', '10': 'BSD-3-Clause', '11': 'MPL-2.0',
 		'12': 'Unlicense', '13': 'CC0-1.0', '14': 'ISC', '15': 'EPL-2.0'
+	};
+	const SPDX_RAW = 'https://raw.githubusercontent.com/spdx/license-list-data/main/text';
+	const spdxUrls = {
+		'4': `${SPDX_RAW}/MIT.txt`,
+		'5': 'https://www.apache.org/licenses/LICENSE-2.0.txt',
+		'6': `${SPDX_RAW}/GPL-3.0-or-later.txt`,
+		'7': `${SPDX_RAW}/AGPL-3.0-or-later.txt`,
+		'8': `${SPDX_RAW}/LGPL-3.0-or-later.txt`,
+		'9': `${SPDX_RAW}/BSD-2-Clause.txt`,
+		'10': `${SPDX_RAW}/BSD-3-Clause.txt`,
+		'11': `${SPDX_RAW}/MPL-2.0.txt`,
+		'12': `${SPDX_RAW}/Unlicense.txt`,
+		'13': `${SPDX_RAW}/CC0-1.0.txt`,
+		'14': `${SPDX_RAW}/ISC.txt`,
+		'15': `${SPDX_RAW}/EPL-2.0.txt`
 	};
 	let licenseLabel = 'None';
 	let licenseWritten = false;
@@ -825,7 +860,8 @@ async function main() {
 							initialValue: ''
 						});
 						const name = !isCancel(orgInput) && typeof orgInput === 'string' ? String(orgInput).trim() : '';
-						body = body.replace(/<copyright holders?>/gi, name || '[copyright holder]');
+						if (name) body = body.replace(/<copyright holders?>/gi, name);
+						// If empty, leave <copyright holders> unchanged so user can replace later.
 					}
 					if (!needsCopyrightHolder && /Copyright\s*\(c\)\s*\n/i.test(body)) {
 						const orgInput = await text({
@@ -837,6 +873,7 @@ async function main() {
 						if (name) {
 							body = body.replace(/Copyright\s*\(c\)\s*\n/i, `Copyright (c) ${year} ${name}\n\n`);
 						}
+						// If empty, leave original so user can replace later.
 					}
 					body = body.replace(/<([^>]+)>/g, (match, key) => {
 						const k = key.toLowerCase().trim();
@@ -903,10 +940,10 @@ async function main() {
 	const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
 	const ncuPresent = deps && 'npm-check-updates' in deps;
 	if (!ncuPresent) {
-		pmAddDev(process.cwd(), pm, 'npm-check-updates');
+		await pmAddDevAsync(process.cwd(), pm, 'npm-check-updates');
 	}
-	runNpx(['npm-check-updates', '-u'], { cwd: process.cwd(), stdio: 'pipe' });
-	pmInstall(process.cwd(), pm);
+	await runNpxAsync(['npm-check-updates', '-u'], { cwd: process.cwd() });
+	await pmInstallAsync(process.cwd(), pm);
 	if (!ncuPresent) {
 		pmRemove(process.cwd(), pm, 'npm-check-updates');
 	}
