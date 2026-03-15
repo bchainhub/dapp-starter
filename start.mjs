@@ -78,13 +78,19 @@ function run(cmd, args = [], opts = {}) {
 }
 
 const LOADING_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
-/** Update spinner message with rotating emoji so terminal doesn't look frozen. Returns stop(). */
 function startSpinnerEmojiRotation(spinner, baseMessage) {
-	const id = setInterval(() => {
+	const tick = () => {
 		const emoji = LOADING_EMOJIS[Math.floor(Math.random() * LOADING_EMOJIS.length)];
-		spinner.message(emoji + ' ' + baseMessage);
-	}, 350);
-	return () => clearInterval(id);
+		const line = emoji + ' ' + baseMessage;
+		if (spinner && typeof spinner.message === 'function') spinner.message(line);
+		process.stderr.write('\r ' + line + '   ');
+	};
+	tick();
+	const id = setInterval(tick, 350);
+	return () => {
+		clearInterval(id);
+		process.stderr.write('\r' + ' '.repeat(60) + '\r');
+	};
 }
 
 /**
@@ -386,6 +392,8 @@ async function main() {
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
+	const npmrcPath = path.join(process.cwd(), '.npmrc');
+	if (fs.existsSync(npmrcPath)) fs.unlinkSync(npmrcPath);
 	const pm = detectPm(process.cwd());
 	log.step(`Package manager: ${pm}`);
 	stopPrep();
@@ -556,7 +564,7 @@ async function main() {
 				const projectCwd = process.cwd();
 				run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${projectCwd}"`], { stdio: 'pipe' });
 				templateMerged = true;
-				log.success('Template merged.');
+				log.success('MOTA template merged.');
 				pmInstall(process.cwd(), pm);
 			} else {
 				log.error('Failed to clone template.');
@@ -872,10 +880,10 @@ async function main() {
 		initialValue: false
 	});
 	if (!isCancel(addFintag) && addFintag) {
-		let fintagKey = await text({ message: 'Fintag key', placeholder: 'e.g. provider' });
+		let fintagKey = await text({ message: 'Fintag key', placeholder: 'e.g. ican:xcb' });
 		if (!isCancel(fintagKey)) {
 			fintagKey = String(fintagKey).trim().toLowerCase();
-			let fintagValue = await text({ message: 'Fintag value', placeholder: 'e.g. my-app' });
+			let fintagValue = await text({ message: 'Fintag value', placeholder: 'e.g. cb…' });
 			if (!isCancel(fintagValue)) {
 				fintagValue = String(fintagValue).trim();
 				if (fintagKey && fintagValue) {
