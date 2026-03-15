@@ -78,16 +78,13 @@ function run(cmd, args = [], opts = {}) {
 }
 
 const LOADING_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
-/** Start rotating random emoji on stderr so terminal doesn't look frozen. Returns stop(). */
-function startEmojiRotation(message = ' working…') {
+/** Update spinner message with rotating emoji so terminal doesn't look frozen. Returns stop(). */
+function startSpinnerEmojiRotation(spinner, baseMessage) {
 	const id = setInterval(() => {
 		const emoji = LOADING_EMOJIS[Math.floor(Math.random() * LOADING_EMOJIS.length)];
-		process.stderr.write(`\r ${emoji}${message}   `);
+		spinner.message(emoji + ' ' + baseMessage);
 	}, 350);
-	return () => {
-		clearInterval(id);
-		process.stderr.write('\r' + ' '.repeat(40) + '\r');
-	};
+	return () => clearInterval(id);
 }
 
 /**
@@ -384,15 +381,18 @@ async function main() {
 		process.exit(1);
 	}
 
+	s1.start('Preparing…');
+	const stopPrep = startSpinnerEmojiRotation(s1, 'Preparing…');
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
-
 	const pm = detectPm(process.cwd());
 	log.step(`Package manager: ${pm}`);
+	stopPrep();
+	s1.stop('Ready.');
 
 	s1.start('Installing base packages…');
-	const stopBase = startEmojiRotation('Installing base packages…');
+	const stopBase = startSpinnerEmojiRotation(s1, 'Installing base packages…');
 	pmAdd(process.cwd(), pm,
 		'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
 		'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
@@ -440,9 +440,11 @@ async function main() {
 	pkg.devDependencies.prompts = pkg.devDependencies.prompts || '*';
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
-	const stopPm = startEmojiRotation('Running package install…');
+	s1.start('Running package install…');
+	const stopPm = startSpinnerEmojiRotation(s1, 'Running package install…');
 	pmInstall(process.cwd(), pm);
 	stopPm();
+	s1.stop('Package install done.');
 
 	const installTranslations = await confirm({
 		message: 'Install translations using typesafe-i18n?',
@@ -454,7 +456,7 @@ async function main() {
 	}
 	if (installTranslations) {
 		s1.start('Installing typesafe-i18n…');
-		const stopI18n = startEmojiRotation('Installing typesafe-i18n…');
+		const stopI18n = startSpinnerEmojiRotation(s1, 'Installing typesafe-i18n…');
 		pmAdd(process.cwd(), pm, 'typesafe-i18n');
 		stopI18n();
 		addScriptsToPackageJson(pkgPath, {
@@ -499,19 +501,24 @@ async function main() {
 		}
 	}
 
-	const ignoreSkills = await confirm({
-		message: 'Add .agents/ and skills-lock.json to .gitignore?',
-		initialValue: true
-	});
-	if (!isCancel(ignoreSkills) && ignoreSkills) {
-		const gi = path.join(process.cwd(), '.gitignore');
-		let gic = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
-		if (!gic.includes('# AI Agents')) {
-			fs.appendFileSync(gi, (gic.endsWith('\n') ? '' : '\n') + '# AI Agents\n');
+	const hasSkills = selections.some((s) => s !== 'none');
+	let ignoreSkills = false;
+	if (hasSkills) {
+		const ignoreSkillsAnswer = await confirm({
+			message: 'Add .agents/ and skills-lock.json to .gitignore?',
+			initialValue: true
+		});
+		ignoreSkills = !isCancel(ignoreSkillsAnswer) && ignoreSkillsAnswer;
+		if (ignoreSkills) {
+			const gi = path.join(process.cwd(), '.gitignore');
+			let gic = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
+			if (!gic.includes('# AI Agents')) {
+				fs.appendFileSync(gi, (gic.endsWith('\n') ? '' : '\n') + '# AI Agents\n');
+			}
+			appendIfMissing(gi, '/.agents/');
+			appendIfMissing(gi, '/skills-lock.json');
+			log.success('Added .agents/ and skills-lock.json to .gitignore');
 		}
-		appendIfMissing(gi, '/.agents/');
-		appendIfMissing(gi, '/skills-lock.json');
-		log.success('Added .agents/ and skills-lock.json to .gitignore');
 	}
 
 	let templateMerged = false;
@@ -539,7 +546,7 @@ async function main() {
 			const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 			const ref = refFromUrl ?? templateVersion ?? getDefaultBranch(tpl);
 			s1.start(`Cloning and merging template (${ref})…`);
-			const stopMerge = startEmojiRotation('Cloning and merging template…');
+			const stopMerge = startSpinnerEmojiRotation(s1, 'Cloning and merging template…');
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-'));
 			const cloneDir = path.join(tmpDir, 'clone');
 			const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -589,7 +596,7 @@ async function main() {
 		}
 		if (excludeLockfiles) {
 			fs.appendFileSync(gi, '\n# Lock files\n');
-			for (const lock of ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'shrinkwrap.yaml', '.pnp.cjs', '.pnp.loader.mjs']) {
+			for (const lock of ['/package-lock.json', '/pnpm-lock.yaml', '/yarn.lock', '/bun.lockb', '/npm-shrinkwrap.json', '/shrinkwrap.yaml', '/.pnp.cjs', '/.pnp.loader.mjs']) {
 				appendIfMissing(gi, lock);
 			}
 		}
@@ -845,7 +852,7 @@ async function main() {
 	}
 
 	s1.start('Updating packages to latest (ncu)…');
-	const stopNcu = startEmojiRotation('Updating packages (ncu)…');
+	const stopNcu = startSpinnerEmojiRotation(s1, 'Updating packages (ncu)…');
 	const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
 	const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
 	const ncuPresent = deps && 'npm-check-updates' in deps;
@@ -860,6 +867,28 @@ async function main() {
 	stopNcu();
 	s1.stop('Packages updated.');
 
+	const addFintag = await confirm({
+		message: 'Add Fintag to .well-known (/.well-known/fintag.json)?',
+		initialValue: false
+	});
+	if (!isCancel(addFintag) && addFintag) {
+		let fintagKey = await text({ message: 'Fintag key', placeholder: 'e.g. provider' });
+		if (!isCancel(fintagKey)) {
+			fintagKey = String(fintagKey).trim().toLowerCase();
+			let fintagValue = await text({ message: 'Fintag value', placeholder: 'e.g. my-app' });
+			if (!isCancel(fintagValue)) {
+				fintagValue = String(fintagValue).trim();
+				if (fintagKey && fintagValue) {
+					const wellKnown = path.join(process.cwd(), 'static', '.well-known');
+					fs.mkdirSync(wellKnown, { recursive: true });
+					const fintagPath = path.join(wellKnown, 'fintag.json');
+					fs.writeFileSync(fintagPath, JSON.stringify({ [fintagKey]: fintagValue }, null, 2) + '\n');
+					log.success('Created .well-known/fintag.json');
+				}
+			}
+		}
+	}
+
 	const doCommit = await confirm({
 		message: 'Create a single git commit with all changes?',
 		initialValue: true
@@ -872,9 +901,9 @@ async function main() {
 		if (commitResult.status !== 0) log.info('Nothing to commit or already committed.');
 	}
 
-	outro('Setup complete.');
-	log.success(`Project ready at: ${process.cwd()}`);
-	log.message('Next: cd ' + process.cwd() + ' && npm run dev -- --open');
+	outro('✨ Setup complete.');
+	log.success(`🎉 Project ready at: ${process.cwd()}`);
+	log.message(`🚀 Next: cd ${process.cwd()} && npm run dev -- --open`);
 }
 
 main().catch((err) => {
