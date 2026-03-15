@@ -32,6 +32,10 @@ const TEMPLATE_URL = 'https://github.com/bchainhub/mota-dapp.git';
 const STARTER_REPO_RAW = 'https://cdn.jsdelivr.net/gh/bchainhub/dapp-starter';
 const CORE_LICENSE_URL = 'https://cdn.jsdelivr.net/gh/bchainhub/core-license@main/LICENSE';
 
+// Ctrl+C exits immediately (including during sv create)
+process.on('SIGINT', () => process.exit(130));
+process.on('SIGTERM', () => process.exit(143));
+
 // Parse argv: --update/-u, --template/-t=URL, --template-version/--tv=REF, rest passed to sv create
 let templateUrl = TEMPLATE_URL;
 let templateVersion = null; // alternative to URL@version; used when URL has no @ref (e.g. mota-dapp or -t without @). null = repo default branch
@@ -65,12 +69,25 @@ for (let i = 2; i < process.argv.length; i++) {
 function run(cmd, args = [], opts = {}) {
 	const result = spawnSync(cmd, args, {
 		stdio: opts.inherit ? 'inherit' : 'pipe',
-		shell: opts.shell ?? true,
+		shell: opts.shell ?? false,
 		cwd: opts.cwd || process.cwd(),
 		encoding: opts.encoding,
 		...opts
 	});
 	return result;
+}
+
+const LOADING_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
+/** Start rotating random emoji on stderr so terminal doesn't look frozen. Returns stop(). */
+function startEmojiRotation(message = ' working…') {
+	const id = setInterval(() => {
+		const emoji = LOADING_EMOJIS[Math.floor(Math.random() * LOADING_EMOJIS.length)];
+		process.stderr.write(`\r ${emoji}${message}   `);
+	}, 350);
+	return () => {
+		clearInterval(id);
+		process.stderr.write('\r' + ' '.repeat(40) + '\r');
+	};
 }
 
 /**
@@ -223,7 +240,7 @@ function composeReadme(opts) {
 		const licenseLine = (opts.licenseLabel === 'Other License' || opts.licenseLabel === 'Commercial Source License (CSL)')
 			? 'CSL or Other License. See \`LICENSE\` in the repo root.'
 			: `${opts.licenseLabel}. See \`LICENSE\` in the repo root.`;
-		lines.push('## License', '', licenseLine, '');
+		lines.push('## License', '', licenseLine);
 	}
 
 	return lines.join('\n');
@@ -360,7 +377,7 @@ async function main() {
 
 	const s1 = spinner();
 	s1.start('Creating SvelteKit project…');
-	const svResult = run('npx', ['sv', 'create', ...passArgs], { stdio: 'inherit', shell: true });
+	const svResult = run('npx', ['sv', 'create', ...passArgs], { stdio: 'inherit' });
 	s1.stop(svResult.status === 0 ? 'SvelteKit project created.' : 'sv create finished.');
 	if (svResult.status !== 0) {
 		log.error('sv create failed.');
@@ -371,19 +388,18 @@ async function main() {
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
 
-	const defaultPage = path.join(process.cwd(), 'src', 'routes', '+page.svelte');
-	if (fs.existsSync(defaultPage)) fs.unlinkSync(defaultPage);
-
 	const pm = detectPm(process.cwd());
 	log.step(`Package manager: ${pm}`);
 
 	s1.start('Installing base packages…');
+	const stopBase = startEmojiRotation('Installing base packages…');
 	pmAdd(process.cwd(), pm,
 		'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
 		'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
 		'lucide-svelte', 'payto-rl', 'tailwindcss', 'txms.js', 'vite-plugin-pwa', 'zod'
 	);
 	pmAddDev(process.cwd(), pm, 'hygen', 'tiged', 'json5', 'ejs', 'prompts');
+	stopBase();
 	s1.stop('Base packages and addon tooling installed.');
 
 	fs.mkdirSync(path.join(process.cwd(), 'bin'), { recursive: true });
@@ -424,7 +440,9 @@ async function main() {
 	pkg.devDependencies.prompts = pkg.devDependencies.prompts || '*';
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
+	const stopPm = startEmojiRotation('Running package install…');
 	pmInstall(process.cwd(), pm);
+	stopPm();
 
 	const installTranslations = await confirm({
 		message: 'Install translations using typesafe-i18n?',
@@ -436,7 +454,9 @@ async function main() {
 	}
 	if (installTranslations) {
 		s1.start('Installing typesafe-i18n…');
+		const stopI18n = startEmojiRotation('Installing typesafe-i18n…');
 		pmAdd(process.cwd(), pm, 'typesafe-i18n');
+		stopI18n();
 		addScriptsToPackageJson(pkgPath, {
 			'typesafe-i18n': 'typesafe-i18n',
 			'i18n:extract': 'typesafe-i18n --no-watch',
@@ -449,6 +469,7 @@ async function main() {
 	const skillChoices = await multiselect({
 		message: 'Select skills to add (space to toggle, Enter to confirm).',
 		options: [
+			{ value: 'none', label: 'None (skip)', hint: 'no skills' },
 			{ value: 'find', label: 'Interactive search (npx skills find)', hint: 'discover any skills' },
 			{ value: 'mota', label: 'MOTA Skills (bchainhub/mota-skills)' },
 			{ value: 'custom', label: 'Add your own repo', hint: 'will prompt for owner/repo' }
@@ -462,6 +483,7 @@ async function main() {
 
 	const selections = Array.isArray(skillChoices) ? skillChoices : [];
 	for (const sel of selections) {
+		if (sel === 'none') continue;
 		if (sel === 'find') {
 			runNpx(['skills', 'find'], { stdio: 'inherit' });
 		} else if (sel === 'mota') {
@@ -494,16 +516,30 @@ async function main() {
 
 	let templateMerged = false;
 	if (templateUrl) {
-		const templateLabel = templateVersion ? `${templateUrl} @ ${templateVersion}` : templateUrl;
-		const doTemplate = await confirm({
-			message: `Merge template from ${templateLabel}?`,
-			initialValue: true
-		});
-		if (!isCancel(doTemplate) && doTemplate) {
+		const { baseUrl } = parseTemplateUrl(templateUrl);
+		const normalizedDefault = TEMPLATE_URL.replace(/\.git$/, '');
+		const normalizedCurrent = baseUrl.replace(/\.git$/, '');
+		const isDefaultTemplate = normalizedCurrent === normalizedDefault;
+		let doTemplate = isDefaultTemplate;
+		if (!isDefaultTemplate) {
+			const templateLabel = templateVersion ? `${templateUrl} @ ${templateVersion}` : templateUrl;
+			const answer = await confirm({
+				message: `Merge template from ${templateLabel}?`,
+				initialValue: true
+			});
+			doTemplate = !isCancel(answer) && answer;
+		}
+		if (doTemplate) {
+			const defaultPage = path.join(process.cwd(), 'src', 'routes', '+page.svelte');
+			if (fs.existsSync(defaultPage)) fs.unlinkSync(defaultPage);
+			const npmrc = path.join(process.cwd(), '.npmrc');
+			if (fs.existsSync(npmrc)) fs.unlinkSync(npmrc);
+
 			const { baseUrl, refFromUrl } = parseTemplateUrl(templateUrl);
 			const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 			const ref = refFromUrl ?? templateVersion ?? getDefaultBranch(tpl);
 			s1.start(`Cloning and merging template (${ref})…`);
+			const stopMerge = startEmojiRotation('Cloning and merging template…');
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-'));
 			const cloneDir = path.join(tmpDir, 'clone');
 			const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -519,6 +555,7 @@ async function main() {
 				log.error('Failed to clone template.');
 			}
 
+			stopMerge();
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 			s1.stop('Done.');
 		}
@@ -551,8 +588,8 @@ async function main() {
 			else appendIfMissing(gi, line);
 		}
 		if (excludeLockfiles) {
-			fs.appendFileSync(gi, '\n# Lock files (managed by installer)\n');
-			for (const lock of ['/package-lock.json', '/pnpm-lock.yaml', '/yarn.lock', '/bun.lockb', '/npm-shrinkwrap.json', '/shrinkwrap.yaml', '/.pnp.cjs', '/.pnp.loader.mjs']) {
+			fs.appendFileSync(gi, '\n# Lock files\n');
+			for (const lock of ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'shrinkwrap.yaml', '.pnp.cjs', '.pnp.loader.mjs']) {
 				appendIfMissing(gi, lock);
 			}
 		}
@@ -790,7 +827,7 @@ async function main() {
 		copyCodeOfConductContributing: !isCancel(copyCodeOfConductContributing) && !!copyCodeOfConductContributing,
 		copyProvider: providerCopied || undefined
 	});
-	fs.writeFileSync(readmePath, readmeContent + '\n');
+	fs.writeFileSync(readmePath, readmeContent.endsWith('\n') ? readmeContent : readmeContent + '\n');
 	log.success('README.md composed and written.');
 
 	if (!isCancel(copyCodeOfConductContributing) && copyCodeOfConductContributing) {
@@ -808,17 +845,19 @@ async function main() {
 	}
 
 	s1.start('Updating packages to latest (ncu)…');
+	const stopNcu = startEmojiRotation('Updating packages (ncu)…');
 	const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
 	const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
 	const ncuPresent = deps && 'npm-check-updates' in deps;
 	if (!ncuPresent) {
 		pmAddDev(process.cwd(), pm, 'npm-check-updates');
 	}
-	runNpx(['npm-check-updates', '-u'], { cwd: process.cwd(), stdio: 'inherit' });
+	runNpx(['npm-check-updates', '-u'], { cwd: process.cwd(), stdio: 'pipe' });
 	pmInstall(process.cwd(), pm);
 	if (!ncuPresent) {
 		pmRemove(process.cwd(), pm, 'npm-check-updates');
 	}
+	stopNcu();
 	s1.stop('Packages updated.');
 
 	const doCommit = await confirm({
