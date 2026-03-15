@@ -93,6 +93,10 @@ function runAsync(cmd, args = [], opts = {}) {
 }
 
 const SPINNER_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
+/** Random emoji frames for spinner (replaces rotating bar |/-\). */
+function randomEmojiFrames(n = 60) {
+	return Array.from({ length: n }, () => SPINNER_EMOJIS[Math.floor(Math.random() * SPINNER_EMOJIS.length)]);
+}
 
 /**
  * Parse template URL; supports jsDelivr-style version at the end: URL@version (e.g. ...mota-dapp.git@1.2.3).
@@ -372,7 +376,7 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 		}
 	}
 
-	const s1 = spinner({ frames: SPINNER_EMOJIS, delay: 300 });
+	const s1 = spinner({ frames: randomEmojiFrames(), delay: 300 });
 	const { baseUrl, refFromUrl } = parseTemplateUrl(tplUrl);
 	const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 	const ref = refFromUrl ?? tplVersion ?? getDefaultBranch(tpl);
@@ -409,7 +413,7 @@ async function main() {
 
 	intro('Dapp Starter');
 
-	const s1 = spinner({ frames: SPINNER_EMOJIS, delay: 300 });
+	const s1 = spinner({ frames: randomEmojiFrames(), delay: 300 });
 	s1.start('Creating SvelteKit project…');
 	const svResult = run('npx', ['sv', 'create', ...passArgs], { stdio: 'inherit' });
 	s1.stop(svResult.status === 0 ? 'SvelteKit project created.' : 'sv create finished.');
