@@ -16,7 +16,6 @@ import {
 	outro,
 	confirm,
 	select,
-	multiselect,
 	text,
 	spinner,
 	log,
@@ -123,6 +122,16 @@ function ensureLineInFile(filePath, line) {
 	if (content.includes(line)) return;
 	const hasNewline = content.endsWith('\n');
 	fs.appendFileSync(filePath, (hasNewline ? '' : '\n') + line + '\n');
+}
+
+function ensureNpmignore(cwd) {
+	const p = path.join(cwd, '.npmignore');
+	if (fs.existsSync(p)) return;
+	const lines = [
+		'node_modules', '.git', '.env', '.env.*', '*.log', '.DS_Store',
+		'.svelte-kit', 'build', '.output', '.vercel', '.netlify', '.wrangler'
+	];
+	fs.writeFileSync(p, lines.join('\n') + '\n');
 }
 
 function addScriptsToPackageJson(pkgPath, scripts) {
@@ -384,6 +393,7 @@ async function main() {
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
+	ensureNpmignore(process.cwd());
 	const npmrcPath = path.join(process.cwd(), '.npmrc');
 	if (fs.existsSync(npmrcPath)) fs.unlinkSync(npmrcPath);
 	const pm = detectPm(process.cwd());
@@ -461,40 +471,39 @@ async function main() {
 	}
 
 	log.info('Agent skills: https://skills.sh/');
-	const skillChoices = await multiselect({
-		message: 'Select skills to add (space to toggle, Enter to confirm).',
+	const skillChoice = await select({
+		message: 'Add agent skills?',
 		options: [
-			{ value: 'none', label: 'None (skip)', hint: 'no skills' },
-			{ value: 'find', label: 'Interactive search (npx skills find)', hint: 'discover any skills' },
+			{ value: 'none', label: 'None (skip)' },
+			{ value: 'find', label: 'Interactive search (npx skills find) – discover and add skills' },
 			{ value: 'mota', label: 'MOTA Skills (bchainhub/mota-skills)' },
-			{ value: 'custom', label: 'Add your own repo', hint: 'will prompt for owner/repo' }
+			{ value: 'custom', label: 'Add your own repo (owner/repo)' }
 		],
-		required: false
+		initialValue: 'none'
 	});
-	if (isCancel(skillChoices)) {
+	if (isCancel(skillChoice)) {
 		cancel('Cancelled.');
 		process.exit(0);
 	}
 
-	const selections = Array.isArray(skillChoices) ? skillChoices : [];
-	for (const sel of selections) {
-		if (sel === 'none') continue;
-		if (sel === 'find') {
-			runNpx(['skills', 'find'], { stdio: 'inherit' });
-		} else if (sel === 'mota') {
-			runNpx(['skills', 'add', 'bchainhub/mota-skills'], { cwd: process.cwd(), stdio: 'inherit' });
-		} else if (sel === 'custom') {
-			let repo = await text({ message: 'Repo (owner/repo or URL; empty to skip)', placeholder: 'owner/repo' });
-			if (isCancel(repo)) break;
-			while (repo && repo.trim()) {
-				runNpx(['skills', 'add', repo.trim()], { cwd: process.cwd(), stdio: 'inherit' });
+	const selections = skillChoice === 'none' ? [] : [skillChoice];
+	if (skillChoice === 'find') {
+		runNpx(['skills', 'find'], { cwd: process.cwd(), stdio: 'inherit' });
+	} else if (skillChoice === 'mota') {
+		runNpx(['skills', 'add', 'bchainhub/mota-skills'], { cwd: process.cwd(), stdio: 'inherit' });
+	} else if (skillChoice === 'custom') {
+		let repo = await text({ message: 'Repo (owner/repo or URL; empty to skip)', placeholder: 'owner/repo' });
+		if (!isCancel(repo) && repo && repo.trim()) {
+			runNpx(['skills', 'add', repo.trim()], { cwd: process.cwd(), stdio: 'inherit' });
+			for (;;) {
 				repo = await text({ message: 'Another repo (empty to finish)', placeholder: '' });
-				if (isCancel(repo)) break;
+				if (isCancel(repo) || !repo || !repo.trim()) break;
+				runNpx(['skills', 'add', repo.trim()], { cwd: process.cwd(), stdio: 'inherit' });
 			}
 		}
 	}
 
-	const hasSkills = selections.some((s) => s !== 'none');
+	const hasSkills = skillChoice !== 'none';
 	let ignoreSkills = false;
 	if (hasSkills) {
 		const ignoreSkillsAnswer = await confirm({
@@ -933,7 +942,7 @@ async function main() {
 		const defaultBranch = run('git', ['config', '--get', 'init.defaultBranch'], { encoding: 'utf8' }).stdout?.trim() || 'main';
 		run('git', ['checkout', '-b', defaultBranch], { stdio: 'pipe' });
 		run('git', ['add', '-A'], { stdio: 'pipe' });
-		const commitResult = run('git', ['commit', '-m', 'chore: initial scaffold and configuration'], { stdio: 'pipe' });
+		const commitResult = run('git', ['commit', '-m', 'MOTA init 🚀'], { stdio: 'pipe' });
 		if (commitResult.status !== 0) log.info('Nothing to commit or already committed.');
 	}
 
