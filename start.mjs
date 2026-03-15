@@ -77,22 +77,10 @@ function run(cmd, args = [], opts = {}) {
 	return result;
 }
 
-const LOADING_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
-function startSpinnerEmojiRotation(spinner, baseMessage) {
-	let index = 0;
-	const tick = () => {
-		const emoji = LOADING_EMOJIS[index % LOADING_EMOJIS.length];
-		index++;
-		const line = emoji + ' ' + baseMessage;
-		if (spinner && typeof spinner.message === 'function') spinner.message(line);
-		process.stderr.write('\r ' + line + '   ');
-	};
-	tick();
-	const id = setInterval(tick, 300);
-	return () => {
-		clearInterval(id);
-		process.stderr.write('\r' + ' '.repeat(60) + '\r');
-	};
+const STEP_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
+function stepMsg(message) {
+	const emoji = STEP_EMOJIS[Math.floor(Math.random() * STEP_EMOJIS.length)];
+	return emoji + ' ' + message;
 }
 
 /**
@@ -350,7 +338,7 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	const { baseUrl, refFromUrl } = parseTemplateUrl(tplUrl);
 	const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 	const ref = refFromUrl ?? tplVersion ?? getDefaultBranch(tpl);
-	s1.start(`Cloning template (${ref})…`);
+	s1.start(stepMsg(`Cloning template (${ref})…`));
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-update-'));
 	const cloneDir = path.join(tmpDir, 'clone');
 	const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -363,7 +351,7 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	}
 	s1.stop('Template cloned.');
 
-	s1.start('Copying files (excluding vite.config.ts)…');
+	s1.start(stepMsg('Copying files (excluding vite.config.ts)…'));
 	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
 	if (viteBackup !== null) {
 		fs.writeFileSync(vitePath, viteBackup);
@@ -383,8 +371,8 @@ async function main() {
 
 	intro('Dapp Starter');
 
-	const s1 = spinner();
-	s1.start('Creating SvelteKit project…');
+	const s1 = spinner({ frames: ['|', '/', '-', '\\'], delay: 300 });
+	s1.start(stepMsg('Creating SvelteKit project…'));
 	const svResult = run('npx', ['sv', 'create', ...passArgs], { stdio: 'inherit' });
 	s1.stop(svResult.status === 0 ? 'SvelteKit project created.' : 'sv create finished.');
 	if (svResult.status !== 0) {
@@ -392,8 +380,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	s1.start('Preparing…');
-	const stopPrep = startSpinnerEmojiRotation(s1, 'Preparing…');
+	s1.start(stepMsg('Preparing…'));
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
@@ -401,18 +388,15 @@ async function main() {
 	if (fs.existsSync(npmrcPath)) fs.unlinkSync(npmrcPath);
 	const pm = detectPm(process.cwd());
 	log.step(`Package manager: ${pm}`);
-	stopPrep();
 	s1.stop('Ready.');
 
-	s1.start('Installing base packages…');
-	const stopBase = startSpinnerEmojiRotation(s1, 'Installing base packages…');
+	s1.start(stepMsg('Installing base packages…'));
 	pmAdd(process.cwd(), pm,
 		'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
 		'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
 		'lucide-svelte', 'payto-rl', 'tailwindcss', 'txms.js', 'vite-plugin-pwa', 'zod'
 	);
 	pmAddDev(process.cwd(), pm, 'hygen', 'tiged', 'json5', 'ejs', 'prompts');
-	stopBase();
 	s1.stop('Base packages and addon tooling installed.');
 
 	fs.mkdirSync(path.join(process.cwd(), 'bin'), { recursive: true });
@@ -453,10 +437,8 @@ async function main() {
 	pkg.devDependencies.prompts = pkg.devDependencies.prompts || '*';
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
-	s1.start('Running package install…');
-	const stopPm = startSpinnerEmojiRotation(s1, 'Running package install…');
+	s1.start(stepMsg('Running package install…'));
 	pmInstall(process.cwd(), pm);
-	stopPm();
 	s1.stop('Package install done.');
 
 	const installTranslations = await confirm({
@@ -468,10 +450,8 @@ async function main() {
 		process.exit(0);
 	}
 	if (installTranslations) {
-		s1.start('Installing typesafe-i18n…');
-		const stopI18n = startSpinnerEmojiRotation(s1, 'Installing typesafe-i18n…');
+		s1.start(stepMsg('Installing typesafe-i18n…'));
 		pmAdd(process.cwd(), pm, 'typesafe-i18n');
-		stopI18n();
 		addScriptsToPackageJson(pkgPath, {
 			'typesafe-i18n': 'typesafe-i18n',
 			'i18n:extract': 'typesafe-i18n --no-watch',
@@ -558,8 +538,7 @@ async function main() {
 			const { baseUrl, refFromUrl } = parseTemplateUrl(templateUrl);
 			const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 			const ref = refFromUrl ?? templateVersion ?? getDefaultBranch(tpl);
-			s1.start(`Cloning and merging template (${ref})…`);
-			const stopMerge = startSpinnerEmojiRotation(s1, 'Cloning and merging template…');
+			s1.start(stepMsg(`Cloning and merging template (${ref})…`));
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-'));
 			const cloneDir = path.join(tmpDir, 'clone');
 			const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -575,7 +554,6 @@ async function main() {
 				log.error('Failed to clone template.');
 			}
 
-			stopMerge();
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 			s1.stop('Done.');
 		}
@@ -771,8 +749,6 @@ async function main() {
 		'8': 'LGPL-3.0-or-later', '9': 'BSD-2-Clause', '10': 'BSD-3-Clause', '11': 'MPL-2.0',
 		'12': 'Unlicense', '13': 'CC0-1.0', '14': 'ISC', '15': 'EPL-2.0'
 	};
-	let licenseOrgName = '';
-
 	let licenseLabel = 'None';
 	let licenseWritten = false;
 
@@ -829,7 +805,35 @@ async function main() {
 			try {
 				const res = await fetch(licenseUrl);
 				if (res.ok) {
-					const body = await res.text();
+					let body = await res.text();
+					const year = new Date().getFullYear();
+					body = body.replace(/<year>/g, String(year));
+					const needsCopyrightHolder = /<copyright holders?>/i.test(body);
+					if (needsCopyrightHolder) {
+						const orgInput = await text({
+							message: 'Copyright holder',
+							placeholder: 'e.g. Jane Doe or Company Name',
+							initialValue: ''
+						});
+						const name = !isCancel(orgInput) && typeof orgInput === 'string' ? String(orgInput).trim() : '';
+						body = body.replace(/<copyright holders?>/gi, name || '[copyright holder]');
+					}
+					if (!needsCopyrightHolder && /Copyright\s*\(c\)\s*\n/i.test(body)) {
+						const orgInput = await text({
+							message: 'Copyright holder (optional)',
+							placeholder: 'e.g. Jane Doe or Company Name',
+							initialValue: ''
+						});
+						const name = !isCancel(orgInput) && typeof orgInput === 'string' ? String(orgInput).trim() : '';
+						if (name) {
+							body = body.replace(/Copyright\s*\(c\)\s*\n/i, `Copyright (c) ${year} ${name}\n\n`);
+						}
+					}
+					body = body.replace(/<([^>]+)>/g, (match, key) => {
+						const k = key.toLowerCase().trim();
+						if (k === 'year') return String(year);
+						return match;
+					});
 					fs.writeFileSync(path.join(process.cwd(), 'LICENSE'), body);
 					log.success('LICENSE written.');
 					const p = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -863,21 +867,29 @@ async function main() {
 	log.success('README.md composed and written.');
 
 	if (!isCancel(copyCodeOfConductContributing) && copyCodeOfConductContributing) {
+		const dataDir = path.join(STARTER_DIR, 'data');
 		for (const name of ['CODE_OF_CONDUCT.md', 'CONTRIBUTING.md']) {
 			try {
-				const res = await fetch(`${STARTER_REPO_RAW}/data/${name}`);
-				if (res.ok) {
-					fs.writeFileSync(path.join(process.cwd(), name), await res.text());
+				const localPath = path.join(dataDir, name);
+				if (fs.existsSync(localPath)) {
+					fs.writeFileSync(path.join(process.cwd(), name), fs.readFileSync(localPath, 'utf8'));
 					log.success(`${name} copied.`);
+				} else {
+					const res = await fetch(`${STARTER_REPO_RAW}/data/${name}`);
+					if (res.ok) {
+						fs.writeFileSync(path.join(process.cwd(), name), await res.text());
+						log.success(`${name} copied.`);
+					} else {
+						log.warn(`Could not copy ${name} (not found).`);
+					}
 				}
-			} catch {
-				log.error(`Failed to fetch ${name}`);
+			} catch (e) {
+				log.error(`Failed to copy ${name}: ${e.message}`);
 			}
 		}
 	}
 
-	s1.start('Updating packages to latest (ncu)…');
-	const stopNcu = startSpinnerEmojiRotation(s1, 'Updating packages (ncu)…');
+	s1.start(stepMsg('Updating packages to latest (ncu)…'));
 	const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
 	const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
 	const ncuPresent = deps && 'npm-check-updates' in deps;
@@ -889,7 +901,6 @@ async function main() {
 	if (!ncuPresent) {
 		pmRemove(process.cwd(), pm, 'npm-check-updates');
 	}
-	stopNcu();
 	s1.stop('Packages updated.');
 
 	const addFintag = await confirm({
