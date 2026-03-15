@@ -79,14 +79,16 @@ function run(cmd, args = [], opts = {}) {
 
 const LOADING_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
 function startSpinnerEmojiRotation(spinner, baseMessage) {
+	let index = 0;
 	const tick = () => {
-		const emoji = LOADING_EMOJIS[Math.floor(Math.random() * LOADING_EMOJIS.length)];
+		const emoji = LOADING_EMOJIS[index % LOADING_EMOJIS.length];
+		index++;
 		const line = emoji + ' ' + baseMessage;
 		if (spinner && typeof spinner.message === 'function') spinner.message(line);
 		process.stderr.write('\r ' + line + '   ');
 	};
 	tick();
-	const id = setInterval(tick, 350);
+	const id = setInterval(tick, 300);
 	return () => {
 		clearInterval(id);
 		process.stderr.write('\r' + ' '.repeat(60) + '\r');
@@ -235,6 +237,9 @@ function composeReadme(opts) {
 			'## Translations',
 			'',
 			'i18n is provided by **typesafe-i18n**.',
+			'',
+			'- `npm run i18n:extract` – extract strings from the project',
+			'- `npm run i18n:watch` – watch and update translations',
 			''
 		);
 	}
@@ -647,15 +652,18 @@ async function main() {
 		let baseUrl;
 		let files;
 		let destDir;
+		let localProviderDir = null;
 		if (providerChoice === 'github') {
 			baseUrl = `${STARTER_REPO_RAW}/providers/.github/ISSUE_TEMPLATE`;
 			files = ['bug.yml', 'feature.yml', 'config.yml'];
 			destDir = path.join(process.cwd(), '.github', 'ISSUE_TEMPLATE');
+			localProviderDir = path.join(STARTER_DIR, 'providers', '.github', 'ISSUE_TEMPLATE');
 			providerCopied = '.github';
 		} else if (providerChoice === 'gitlab') {
 			baseUrl = `${STARTER_REPO_RAW}/providers/.gitlab/issue_templates`;
 			files = ['bug_report.md', 'feature_request.md'];
 			destDir = path.join(process.cwd(), '.gitlab', 'issue_templates');
+			localProviderDir = path.join(STARTER_DIR, 'providers', '.gitlab', 'issue_templates');
 			providerCopied = '.gitlab';
 		} else if (providerChoice === 'custom') {
 			const urlInput = await text({
@@ -690,14 +698,28 @@ async function main() {
 		if (providerCopied && baseUrl && files && destDir) {
 			fs.mkdirSync(destDir, { recursive: true });
 			let ok = 0;
+			const useLocal = localProviderDir && fs.existsSync(localProviderDir);
 			for (const f of files) {
 				try {
-					const res = await fetch(`${baseUrl}/${f}`);
-					if (res.ok) {
-						fs.writeFileSync(path.join(destDir, f), await res.text());
-						ok++;
+					let copied = false;
+					if (useLocal) {
+						const localPath = path.join(localProviderDir, f);
+						if (fs.existsSync(localPath)) {
+							fs.writeFileSync(path.join(destDir, f), fs.readFileSync(localPath, 'utf8'));
+							copied = true;
+							ok++;
+						}
 					}
-				} catch {}
+					if (!copied) {
+						const res = await fetch(`${baseUrl}/${f}`);
+						if (res.ok) {
+							fs.writeFileSync(path.join(destDir, f), await res.text());
+							ok++;
+						}
+					}
+				} catch (e) {
+					if (providerChoice === 'custom') log.warn('Failed to copy ' + f + ': ' + e.message);
+				}
 			}
 			if (ok) log.success(providerChoice === 'custom' ? 'Issue templates copied from custom URL.' : `${providerCopied} copied.`);
 		}
@@ -749,20 +771,7 @@ async function main() {
 		'8': 'LGPL-3.0-or-later', '9': 'BSD-2-Clause', '10': 'BSD-3-Clause', '11': 'MPL-2.0',
 		'12': 'Unlicense', '13': 'CC0-1.0', '14': 'ISC', '15': 'EPL-2.0'
 	};
-	// Licenses that support an optional copyright holder (Other/CSL excluded: user pastes full text)
-	const licensesWithOrg = new Set(['4', '5', '6', '7', '8', '9', '10', '11', '14', '15']);
-
 	let licenseOrgName = '';
-	if (licChoice !== '0' && licChoice !== '1' && licChoice !== '2' && licensesWithOrg.has(licChoice)) {
-		const orgInput = await text({
-			message: 'Organization / copyright holder name (optional)',
-			placeholder: 'Leave empty to omit',
-			initialValue: ''
-		});
-		if (!isCancel(orgInput) && typeof orgInput === 'string' && orgInput.trim()) {
-			licenseOrgName = orgInput.trim();
-		}
-	}
 
 	let licenseLabel = 'None';
 	let licenseWritten = false;
@@ -792,6 +801,18 @@ async function main() {
 				body = raw;
 			}
 			if (body) {
+				if (licChoice === '2') {
+					const orgInput = await text({
+						message: 'Copyright holder name (optional)',
+						placeholder: 'Leave empty to omit',
+						initialValue: ''
+					});
+					const name = !isCancel(orgInput) && typeof orgInput === 'string' ? orgInput.trim() : '';
+					if (name) {
+						const year = new Date().getFullYear();
+						body = `Copyright (c) ${year} ${name}\n` + body;
+					}
+				}
 				fs.writeFileSync(path.join(process.cwd(), 'LICENSE'), body);
 				log.success('LICENSE written.');
 				const p = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -808,11 +829,7 @@ async function main() {
 			try {
 				const res = await fetch(licenseUrl);
 				if (res.ok) {
-					let body = await res.text();
-					if (licenseOrgName) {
-						const year = new Date().getFullYear();
-						body = `Copyright (c) ${year} ${licenseOrgName}\n\n` + body;
-					}
+					const body = await res.text();
 					fs.writeFileSync(path.join(process.cwd(), 'LICENSE'), body);
 					log.success('LICENSE written.');
 					const p = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
