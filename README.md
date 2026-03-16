@@ -457,10 +457,6 @@ npx addon owner/repo auth install --cache
 
 This keeps addon sources under `.addon-cache/` so they do not need to be downloaded every time.
 
-## Notes
+## License
 
-- public command stays `npx addon ...`
-- implementation is Node-based via `bin/addon.mjs`
-- hidden control files are supported automatically
-- `merge-addon-config.mjs` is no longer needed
-- there is no separate `_config.delete.json5`; add and remove are handled in one config file
+This starter is licensed under the [CORE License](https://github.com/bchainhub/core-license).
