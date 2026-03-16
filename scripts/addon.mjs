@@ -39,6 +39,21 @@ const dryRun = rest.includes('--dry-run') || rest.includes('-d');
 const cacheDir = path.join(cwd, '.addon-cache', repo.replace(/[/:@]/g, '_'));
 const tmpDir = useCache ? cacheDir : fs.mkdtempSync(path.join(os.tmpdir(), 'addon-'));
 
+/** Normalize repo to HTTPS URL so clone works without SSH keys (avoids "Permission denied (publickey)"). */
+function repoToHttps(repoSpec) {
+	const s = String(repoSpec).trim();
+	// Already HTTPS
+	if (s.startsWith('https://')) return s;
+	// SSH GitHub
+	const sshGitHub = s.match(/^git@github\.com:([^/]+\/[^/#]+)(?:\.git)?(#.*)?$/);
+	if (sshGitHub) return `https://github.com/${sshGitHub[1]}${sshGitHub[2] || ''}`;
+	// Shorthand: owner/repo or owner/repo#ref
+	if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(#.*)?$/.test(s)) return `https://github.com/${s}`;
+	// github:owner/repo or github:owner/repo#ref
+	if (s.startsWith('github:')) return `https://github.com/${s.slice(7)}`;
+	return s;
+}
+
 function toFileUrl(p) {
 	return new URL(`file://${p}`);
 }
@@ -141,7 +156,9 @@ async function fetchAddon() {
 	if (useCache && fs.existsSync(tmpDir)) return;
 
 	fs.mkdirSync(tmpDir, { recursive: true });
-	const emitter = tiged(repo, { mode: 'git' });
+	// Use HTTPS URL so clone works without SSH keys (public repos)
+	const cloneUrl = repoToHttps(repo);
+	const emitter = tiged(cloneUrl, { mode: 'git' });
 	await emitter.clone(tmpDir);
 }
 
