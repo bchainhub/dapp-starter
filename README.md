@@ -1,4 +1,4 @@
-# Dapp Starter – Installer
+# ĐApp Starter
 
 This repository ships a one-shot installer that scaffolds a SvelteKit app, adds common deps, optionally merges a template, sets up AI toolkit integration, tweaks `.gitignore`, can copy shared assets from the starter repo, sets a license, and optionally makes a local git commit.
 
