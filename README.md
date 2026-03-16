@@ -112,6 +112,36 @@ An addon repository contains generator/action folders. Hidden files `_scripts`, 
       _lang.en.json5         _lang/en.json5
 ```
 
+### The `_migrations` folder
+
+A `_migrations` folder may be created or copied into your project (e.g. by addons or the template). It is intended for database migrations. It is listed in `.gitignore`, so it **will not be committed** to the git repository - but you can change it to commit it if you want.
+
+You need to configure your app to use this folder. For example, with **Drizzle ORM** set `out` to `./_migrations` in your config:
+
+```ts
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  schema: "./src/db/schema.ts",
+  out: "./_migrations",   // 👈 custom migrations folder
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env.DATABASE_URL!,
+  },
+});
+```
+
+To execute migrations, add the intended migration command to your `_scripts.ejs.sh` or `_scripts.sh` scripts.
+
+For example:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+npx drizzle-kit push
+```
+
 ## What each file does
 
 ### `prompt.js`

@@ -622,7 +622,7 @@ async function main() {
 			'', '# Addon cache', '/.addon-cache/', '/.hygen-tmp-*', '/_templates/',
 			'', '# Output files', '/.output/', '/.vercel/', '/.netlify/', '/.wrangler/', '/.svelte-kit/', '/build/',
 			'', '# Wrangler', '/wrangler.toml', '/wrangler.jsonc',
-			'', '# Migration files', '/better-auth_migrations/'
+			'', '# Migration files', '/_migrations/', '/better-auth_migrations/'
 		];
 		for (const line of extras) {
 			if (line === '' || line.startsWith('#')) fs.appendFileSync(gi, line + '\n');
