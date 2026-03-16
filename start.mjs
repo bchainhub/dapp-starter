@@ -96,7 +96,7 @@ function runAsync(cmd, args = [], opts = {}) {
 	});
 }
 
-const SPINNER_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '⚙️', '🌐', '📂'];
+const SPINNER_EMOJIS = ['🔄', '⏳', '📦', '🚀', '✨', '🔧', '📥', '💾', '🌐', '📂', '💻'];
 /** Random emoji frames for spinner (replaces rotating bar |/-\). */
 function randomEmojiFrames(n = 60) {
 	return Array.from({ length: n }, () => SPINNER_EMOJIS[Math.floor(Math.random() * SPINNER_EMOJIS.length)]);
@@ -379,7 +379,7 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	});
 	if (!isCancel(doCommit) && doCommit) {
 		const addResult = run('git', ['add', '-A'], { cwd, stdio: 'pipe' });
-		const commitResult = run('git', ['commit', '-m', 'chore: checkpoint before template update'], { cwd, stdio: 'pipe' });
+		const commitResult = run('git', ['commit', '-m', 'MOTA update checkpoint 💾'], { cwd, stdio: 'pipe' });
 		if (commitResult.status !== 0) {
 			log.warn('Nothing to commit or commit failed. Continuing.');
 		} else {
