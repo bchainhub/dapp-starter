@@ -160,10 +160,30 @@ async function fetchAddon() {
 	const cloneUrl = repoToHttps(repo);
 	const emitter = tiged(cloneUrl, { mode: 'git' });
 	await emitter.clone(tmpDir);
+	ensureTemplatesLayout();
+}
+
+const TMPLS_DIR = '_templates';
+
+/** Ensure tmpDir has _templates/generator/action so HYGEN_TMPLS can point at _templates; move root-level generator dirs into _templates if needed. */
+function ensureTemplatesLayout() {
+	const templatesPath = path.join(tmpDir, TMPLS_DIR);
+	const actionInTemplates = path.join(templatesPath, generator, action);
+	if (fs.existsSync(actionInTemplates)) return;
+
+	// Clone has generator/action at root; create _templates and move generator dirs into it
+	fs.mkdirSync(templatesPath, { recursive: true });
+	const entries = fs.readdirSync(tmpDir, { withFileTypes: true });
+	for (const ent of entries) {
+		if (!ent.isDirectory() || ent.name === TMPLS_DIR || ent.name === '.git') continue;
+		const src = path.join(tmpDir, ent.name);
+		const dest = path.join(templatesPath, ent.name);
+		fs.renameSync(src, dest);
+	}
 }
 
 function resolveActionDir() {
-	return path.join(tmpDir, generator, action);
+	return path.join(tmpDir, TMPLS_DIR, generator, action);
 }
 
 async function loadPrompts(actionDir) {
@@ -201,9 +221,12 @@ function runHygen(locals) {
 		...buildCliArgsFromLocals(locals)
 	];
 
+	// Point Hygen at _templates inside the clone (cleaned with tmpDir when !useCache)
+	const hygenTmpls = path.join(tmpDir, TMPLS_DIR);
 	const result = spawnSync('npx', args, {
 		stdio: 'inherit',
-		cwd
+		cwd,
+		env: { ...process.env, HYGEN_TMPLS: hygenTmpls }
 	});
 
 	if (result.status !== 0) process.exit(result.status ?? 1);
@@ -585,6 +608,7 @@ function applyHiddenConfig(actionDir, locals) {
 
 async function main() {
 	await fetchAddon();
+	ensureTemplatesLayout();
 
 	const actionDir = resolveActionDir();
 	if (!fs.existsSync(actionDir)) {
