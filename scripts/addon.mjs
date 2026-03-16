@@ -8,16 +8,33 @@ import JSON5 from 'json5';
 import prompts from 'prompts';
 import tiged from 'tiged';
 
-const [, , repo, generator, action, ...rest] = process.argv;
+const restArgs = process.argv.slice(2);
+const repo = restArgs[0];
+const generator = restArgs[1];
+const action = restArgs[2];
+let noTranslations = false;
+let noScripts = false;
+let noConfig = false;
+const rest = restArgs.slice(3).filter((arg) => {
+	if (arg === '--no-translations' || arg === '-nt') { noTranslations = true; return false; }
+	if (arg === '--no-scripts' || arg === '-ns') { noScripts = true; return false; }
+	if (arg === '--no-config' || arg === '-nc') { noConfig = true; return false; }
+	return true;
+});
 
 if (!repo || !generator || !action) {
-	console.error('Usage: addon <repo> <generator> <action> [--cache] [--dry-run]');
+	console.error('Usage: addon <repo> <generator> <action> [options]');
+	console.error('  -c, --cache            use cache dir for repo');
+	console.error('  -d, --dry-run          no writes, script/config/lang skipped');
+	console.error('  -nt, --no-translations  skip _lang processing');
+	console.error('  -ns, --no-scripts      skip _scripts execution');
+	console.error('  -nc, --no-config       skip _config merge');
 	process.exit(1);
 }
 
 const cwd = process.cwd();
-const useCache = rest.includes('--cache');
-const dryRun = rest.includes('--dry-run');
+const useCache = rest.includes('--cache') || rest.includes('-c');
+const dryRun = rest.includes('--dry-run') || rest.includes('-d');
 
 const cacheDir = path.join(cwd, '.addon-cache', repo.replace(/[/:@]/g, '_'));
 const tmpDir = useCache ? cacheDir : fs.mkdtempSync(path.join(os.tmpdir(), 'addon-'));
@@ -180,48 +197,59 @@ function renderEjsFile(filePath, locals) {
 	return ejs.render(raw, locals, { filename: filePath });
 }
 
+/** Return list of dirs to search: [actionDir, actionDir/subFolder] if subFolder exists. */
+function searchDirs(actionDir, subFolder) {
+	const dirs = [actionDir];
+	const sub = path.join(actionDir, subFolder);
+	if (fs.existsSync(sub) && fs.statSync(sub).isDirectory()) dirs.push(sub);
+	return dirs;
+}
+
 function runHiddenScript(actionDir, locals) {
+	if (noScripts) return;
 	const candidates = ['_scripts.ejs.sh', '_scripts.sh'];
 
-	for (const name of candidates) {
-		const file = path.join(actionDir, name);
-		if (!fs.existsSync(file)) continue;
-		if (dryRun) {
-			console.log(`[dry-run] skipping script ${name}`);
+	for (const dir of searchDirs(actionDir, '_scripts')) {
+		for (const name of candidates) {
+			const file = path.join(dir, name);
+			if (!fs.existsSync(file)) continue;
+			if (dryRun) {
+				console.log(`[dry-run] skipping script ${name}`);
+				return;
+			}
+
+			let script = fs.readFileSync(file, 'utf8');
+			if (name.endsWith('.ejs.sh')) {
+				script = ejs.render(script, locals, { filename: file });
+			}
+
+			const tmpScript = path.join(os.tmpdir(), `addon-script-${Date.now()}.sh`);
+			fs.writeFileSync(tmpScript, script, { mode: 0o755 });
+
+			const env = {
+				...process.env,
+				ADDON_REPO: repo,
+				ADDON_GENERATOR: generator,
+				ADDON_ACTION: action,
+				ADDON_CONTEXT_JSON: JSON.stringify(locals)
+			};
+
+			for (const [key, value] of Object.entries(locals)) {
+				const envKey = `ADDON_VAR_${String(key).toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
+				env[envKey] = typeof value === 'object' ? JSON.stringify(value) : String(value);
+			}
+
+			const result = spawnSync('bash', [tmpScript], {
+				stdio: 'inherit',
+				cwd,
+				env
+			});
+
+			fs.rmSync(tmpScript, { force: true });
+
+			if (result.status !== 0) process.exit(result.status ?? 1);
 			return;
 		}
-
-		let script = fs.readFileSync(file, 'utf8');
-		if (name.endsWith('.ejs.sh')) {
-			script = ejs.render(script, locals, { filename: file });
-		}
-
-		const tmpScript = path.join(os.tmpdir(), `addon-script-${Date.now()}.sh`);
-		fs.writeFileSync(tmpScript, script, { mode: 0o755 });
-
-		const env = {
-			...process.env,
-			ADDON_REPO: repo,
-			ADDON_GENERATOR: generator,
-			ADDON_ACTION: action,
-			ADDON_CONTEXT_JSON: JSON.stringify(locals)
-		};
-
-		for (const [key, value] of Object.entries(locals)) {
-			const envKey = `ADDON_VAR_${String(key).toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
-			env[envKey] = typeof value === 'object' ? JSON.stringify(value) : String(value);
-		}
-
-		const result = spawnSync('bash', [tmpScript], {
-			stdio: 'inherit',
-			cwd,
-			env
-		});
-
-		fs.rmSync(tmpScript, { force: true });
-
-		if (result.status !== 0) process.exit(result.status ?? 1);
-		return;
 	}
 }
 
@@ -308,49 +336,218 @@ function rawObjectMapToPlain(map) {
 	return out;
 }
 
-function applyHiddenConfig(actionDir, locals) {
-	const candidates = ['_config.ejs.json5', '_config.json5'];
+/** Clean generator to a valid JS key for modules (e.g. "mota-support" -> "motaSupport"). */
+function cleanModuleName(name) {
+	if (!name || typeof name !== 'string') return 'module';
+	return name
+		.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+		.replace(/-/g, '')
+		.replace(/[^A-Za-z0-9_$]/g, '') || 'module';
+}
 
-	for (const name of candidates) {
-		const file = path.join(actionDir, name);
-		if (!fs.existsSync(file)) continue;
+/** Find the first top-level object in i18n index.ts (const x = { ... }). */
+function findI18nRootObject(content) {
+	const eqBrace = content.indexOf('= {');
+	if (eqBrace === -1) return null;
+	const start = content.indexOf('{', eqBrace);
+	if (start === -1) return null;
+	let depth = 1;
+	let i = start + 1;
+	while (i < content.length && depth > 0) {
+		const ch = content[i];
+		if (ch === '"' || ch === "'" || ch === '`') {
+			const q = ch;
+			i++;
+			while (i < content.length && content[i] !== q) {
+				if (content[i] === '\\') i++;
+				i++;
+			}
+			i++;
+			continue;
+		}
+		if (ch === '{') depth++;
+		else if (ch === '}') depth--;
+		i++;
+	}
+	return { start, end: i, raw: content.slice(start, i) };
+}
+
+/** Convert parsed TS object map (key -> __rawObject | __expr) to plain nested object for merging. */
+function parseTsObjectToPlain(map) {
+	const out = {};
+	for (const [key, value] of Object.entries(map)) {
+		if (value && value.__rawObject !== undefined) {
+			const inner = parseTopLevelTsObject(value.__rawObject);
+			out[key] = parseTsObjectToPlain(inner);
+		} else if (value && value.__expr !== undefined) {
+			out[key] = value.__expr;
+		} else {
+			out[key] = value;
+		}
+	}
+	return out;
+}
+
+/** Serialize parsed map (key -> __rawObject | __expr) back to TS object string. */
+function mapToTsRaw(map) {
+	const lines = [];
+	for (const [key, value] of Object.entries(map)) {
+		const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+		if (value && value.__rawObject !== undefined) {
+			lines.push(`  ${safeKey}: ${value.__rawObject},`);
+		} else if (value && value.__expr !== undefined) {
+			lines.push(`  ${safeKey}: ${value.__expr},`);
+		}
+	}
+	return '{\n' + lines.join('\n') + '\n}';
+}
+
+function applyHiddenLang(actionDir, locals) {
+	if (noTranslations) return;
+
+	const langEntries = [];
+	for (const dir of searchDirs(actionDir, '_lang')) {
+		const isLangDir = path.basename(dir) === '_lang';
+		const names = fs.readdirSync(dir, { withFileTypes: true })
+			.filter((d) => {
+				if (!d.isFile() || (!d.name.endsWith('.json5') && !d.name.endsWith('.ejs.json5'))) return false;
+				return isLangDir || d.name.startsWith('_lang.');
+			})
+			.map((d) => d.name);
+		for (const name of names) {
+			const match = name.match(isLangDir
+				? /^([a-z]{2,})(?:\.([a-z0-9_.]+))?\.(ejs\.)?json5$/i
+				: /^_lang\.([a-z]{2,})(?:\.([a-z0-9_.]+))?\.(ejs\.)?json5$/i);
+			if (!match) continue;
+			const lang = match[1];
+			const pathSuffix = match[2];
+			const hasEjs = !!match[3];
+			langEntries.push({ dir, name, lang, pathSuffix, hasEjs });
+		}
+	}
+
+	const cleanedGenerator = cleanModuleName(generator);
+	const defaultPath = `modules.${cleanedGenerator}`;
+
+	for (const { dir, name, lang, pathSuffix, hasEjs } of langEntries) {
+		const langCode = lang.toLowerCase();
+		const pathFromFile = hasEjs ? undefined : pathSuffix;
+		const i18nPath = path.join(cwd, 'src', 'i18n', langCode, 'index.ts');
+		if (!fs.existsSync(i18nPath)) {
+			if (!dryRun) console.warn(`[addon] Skipping _lang: src/i18n/${langCode}/index.ts not found`);
+			continue;
+		}
 		if (dryRun) {
-			console.log(`[dry-run] skipping config ${name}`);
-			return;
+			console.log(`[dry-run] would apply _lang from ${name} -> src/i18n/${langCode}/index.ts`);
+			continue;
 		}
 
-		let text = fs.readFileSync(file, 'utf8');
-		if (name.endsWith('.ejs.json5')) {
-			text = ejs.render(text, locals, { filename: file });
+		let text = fs.readFileSync(path.join(dir, name), 'utf8');
+		if (hasEjs) {
+			text = ejs.render(text, locals, { filename: path.join(actionDir, name) });
 		}
-
 		let parsed = JSON5.parse(text);
 		parsed = replaceExprs(parsed);
 
-		const viteFile = path.join(cwd, 'vite.config.ts');
-		if (!fs.existsSync(viteFile)) return;
+		const $remove = parsed.$remove;
+		const $path = parsed.$path ?? (pathFromFile || defaultPath);
+		delete parsed.$remove;
+		delete parsed.$path;
 
-		const src = fs.readFileSync(viteFile, 'utf8');
-		const block = findModulesBlock(src);
-		if (!block) {
-			console.warn('No modules block found in vite.config.ts');
-			return;
+		const pathParts = $path.split('.').filter(Boolean);
+		if (pathParts.length < 1) continue;
+
+		const src = fs.readFileSync(i18nPath, 'utf8');
+		const rootBlock = findI18nRootObject(src);
+		if (!rootBlock) {
+			console.warn(`[addon] No root object found in ${i18nPath}`);
+			continue;
 		}
 
-		const currentMap = parseTopLevelTsObject(block.raw);
-		let current = rawObjectMapToPlain(currentMap);
+		const rootMap = parseTopLevelTsObject(rootBlock.raw);
+		if (pathParts.length === 1) {
+			const key = pathParts[0];
+			const current = rootMap[key]?.__rawObject
+				? parseTsObjectToPlain(parseTopLevelTsObject(rootMap[key].__rawObject))
+				: {};
+			let merged = deepMerge(isPlainObject(current) ? current : {}, parsed);
+			merged = removeKeys(merged, $remove);
+			rootMap[key] = { __rawObject: objectToTs(merged, 0) };
+		} else {
+			const topKey = pathParts[0];
+			const rest = pathParts.slice(1);
+			const lastKey = rest[rest.length - 1];
+			const topRaw = rootMap[topKey]?.__rawObject || '{}';
+			const topMap = parseTopLevelTsObject(topRaw);
+			const stack = [topMap];
+			let inner = topMap;
+			for (let i = 0; i < rest.length - 1; i++) {
+				inner = parseTopLevelTsObject(inner[rest[i]]?.__rawObject || '{}');
+				stack.push(inner);
+			}
+			const lastRaw = inner[lastKey]?.__rawObject || '{}';
+			const lastPlain = parseTsObjectToPlain(parseTopLevelTsObject(lastRaw));
+			let merged = deepMerge(isPlainObject(lastPlain) ? lastPlain : {}, parsed);
+			merged = removeKeys(merged, $remove);
+			inner[lastKey] = { __rawObject: objectToTs(merged, 0) };
+			for (let i = stack.length - 1; i > 0; i--) {
+				stack[i - 1][rest[i - 1]] = { __rawObject: mapToTsRaw(stack[i]) };
+			}
+			rootMap[topKey] = { __rawObject: mapToTsRaw(topMap) };
+		}
 
-		const removeSpec = parsed.$remove;
-		delete parsed.$remove;
+		const newRootRaw = mapToTsRaw(rootMap);
+		const next = src.slice(0, rootBlock.start) + newRootRaw + src.slice(rootBlock.end);
+		fs.writeFileSync(i18nPath, next);
+	}
+}
 
-		current = removeKeys(current, removeSpec);
-		current = deepMerge(current, parsed);
+function applyHiddenConfig(actionDir, locals) {
+	if (noConfig) return;
+	const candidates = ['_config.ejs.json5', '_config.json5'];
 
-		const newBlock = objectToTs(current, 0);
-		const next = src.slice(0, block.start) + newBlock + src.slice(block.end);
+	for (const dir of searchDirs(actionDir, '_config')) {
+		for (const name of candidates) {
+			const file = path.join(dir, name);
+			if (!fs.existsSync(file)) continue;
+			if (dryRun) {
+				console.log(`[dry-run] skipping config ${name}`);
+				return;
+			}
 
-		fs.writeFileSync(viteFile, next);
-		return;
+			let text = fs.readFileSync(file, 'utf8');
+			if (name.endsWith('.ejs.json5')) {
+				text = ejs.render(text, locals, { filename: file });
+			}
+
+			let parsed = JSON5.parse(text);
+			parsed = replaceExprs(parsed);
+
+			const viteFile = path.join(cwd, 'vite.config.ts');
+			if (!fs.existsSync(viteFile)) return;
+
+			const src = fs.readFileSync(viteFile, 'utf8');
+			const block = findModulesBlock(src);
+			if (!block) {
+				console.warn('No modules block found in vite.config.ts');
+				return;
+			}
+
+			const currentMap = parseTopLevelTsObject(block.raw);
+			let current = rawObjectMapToPlain(currentMap);
+
+			const removeSpec = parsed.$remove;
+			delete parsed.$remove;
+
+			current = removeKeys(current, removeSpec);
+			current = deepMerge(current, parsed);
+
+			const newBlock = objectToTs(current, 0);
+			const next = src.slice(0, block.start) + newBlock + src.slice(block.end);
+
+			fs.writeFileSync(viteFile, next);
+			return;
+		}
 	}
 }
 
@@ -368,6 +565,7 @@ async function main() {
 	runHygen(locals);
 	runHiddenScript(actionDir, locals);
 	applyHiddenConfig(actionDir, locals);
+	applyHiddenLang(actionDir, locals);
 
 	if (!useCache) {
 		fs.rmSync(tmpDir, { recursive: true, force: true });

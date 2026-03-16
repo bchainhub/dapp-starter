@@ -72,7 +72,7 @@ The installer:
 After installation, projects can run:
 
 ```bash
-npx addon <repo> <generator> <action>
+npx addon <repo> <generator> <action> [options]
 ```
 
 Examples:
@@ -80,13 +80,23 @@ Examples:
 ```bash
 npx addon bchainhub@mota-support auth install
 npx addon owner/repo auth uninstall
-npx addon owner/repo auth install --cache
-npx addon owner/repo auth install --dry-run
+npx addon owner/repo auth install -c
+npx addon owner/repo auth install -d
 ```
+
+**Options (short and long):**
+
+| Flag | Short | Effect |
+| --- | --- | --- |
+| `--cache` | `-c` | Use cache dir for repo (faster re-runs). |
+| `--dry-run` | `-d` | No writes; script/config/lang steps are skipped. |
+| `--no-translations` | `-nt` | Skip _lang (translations) processing. |
+| `--no-scripts` | `-ns` | Skip _scripts execution. |
+| `--no-config` | `-nc` | Skip _config merge. |
 
 ## Addon structure
 
-An addon repository contains generator/action folders:
+An addon repository contains generator/action folders. Hidden files `_scripts`, `_config`, and `_lang` can live **either** in the action root **or** inside optional subfolders of the same name:
 
 ```text
 <repo>/
@@ -94,10 +104,12 @@ An addon repository contains generator/action folders:
     <action>/
       prompt.js
       *.ejs.t
-      _scripts.ejs.sh
-      _scripts.sh
-      _config.ejs.json5
-      _config.json5
+      _scripts.ejs.sh    or  _scripts/_scripts.ejs.sh
+      _scripts.sh            _scripts/_scripts.sh
+      _config.ejs.json5  or  _config/_config.ejs.json5
+      _config.json5          _config/_config.json5
+      _lang.sk.json5     or  _lang/sk.json5, _lang/en.ejs.json5, ...
+      _lang.en.json5         _lang/en.json5
 ```
 
 ## What each file does
@@ -230,6 +242,63 @@ Use `_config.ejs.json5` when you want prompt values interpolated before merge:
 ```
 
 Use `_config.json5` when no interpolation is needed.
+
+### `_lang` (translations)
+
+Optional. Language files are merged into `src/i18n/<lang>/index.ts` (e.g. `src/i18n/en/index.ts`). They can live in the action root or inside a `_lang/` folder.
+
+- **In action root:** `_lang.<code>.json5` or `_lang.<code>.<pathSuffix>.json5`, e.g. `_lang.sk.json5`, `_lang.en.content.ejs.json5`.
+- **In `_lang/` folder:** `<code>.json5` or `<code>.<pathSuffix>.json5`, e.g. `sk.json5`, `en.content.ejs.json5`.
+
+Use `.ejs.json5` when you need prompt values interpolated (e.g. `<%= routeName %>`). Use `$path` to target a different object path in the i18n file (default is `modules.<generator>`). Use `$remove` to remove keys from the target before merging (see below).
+
+#### Removing old translation strings
+
+To drop keys that are no longer used (e.g. when uninstalling an addon or deprecating strings), set `$remove` in the language file. It is applied to the target object before your new keys are merged. You can pass:
+
+- **Array** — top-level keys to delete: `"$remove": ["oldTitle", "deprecatedLabel"]`
+- **String** — single key: `"$remove": "oldTitle"`
+- **Object** — nested removal: use `true` to delete a key, or a nested object to remove keys inside it
+
+Example (remove two top-level keys and one nested key, then add/update others):
+
+```json5
+{
+  "$path": "modules.myAddon",
+  "$remove": {
+    "oldTitle": true,
+    "oldDescription": true,
+    "actions": { "legacySubmit": true }
+  },
+  "title": "New title",
+  "actions": { "submit": "Odoslať" }
+}
+```
+
+Example `_lang.sk.json5` (or `_lang/sk.json5`):
+
+```json5
+{
+  "$path": "modules.myAddon",
+  "title": "Názov",
+  "description": "Popis",
+  "actions": {
+    "submit": "Odoslať",
+    "cancel": "Zrušiť"
+  }
+}
+```
+
+With EJS, e.g. `_lang/en.content.ejs.json5`:
+
+```json5
+{
+  "$path": "modules.myAddon",
+  "welcome": "Welcome to <%= featureName %>"
+}
+```
+
+Skip translation application with `-nt` or `--no-translations`.
 
 ## Config merge behavior
 
