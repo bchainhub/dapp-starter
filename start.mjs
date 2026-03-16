@@ -69,25 +69,29 @@ for (let i = 2; i < process.argv.length; i++) {
 }
 
 function run(cmd, args = [], opts = {}) {
-	const result = spawnSync(cmd, args, {
+	// Avoid DEP0190: never use shell: true when passing args (they are concatenated, not escaped).
+	const spawnOpts = {
 		stdio: opts.inherit ? 'inherit' : 'pipe',
-		shell: opts.shell ?? false,
 		cwd: opts.cwd || process.cwd(),
 		encoding: opts.encoding,
-		...opts
-	});
+		...opts,
+		shell: args.length === 0 && opts.shell === true
+	};
+	const result = spawnSync(cmd, args, spawnOpts);
 	return result;
 }
 
 /** Run a command asynchronously so the event loop (and spinner) can run. Returns Promise<{ status }>. */
 function runAsync(cmd, args = [], opts = {}) {
+	// Avoid DEP0190: never use shell: true when passing args.
 	return new Promise((resolve) => {
-		const child = spawn(cmd, args, {
+		const spawnOpts = {
 			stdio: opts.stdio ?? 'pipe',
-			shell: opts.shell ?? false,
 			cwd: opts.cwd || process.cwd(),
-			...opts
-		});
+			...opts,
+			shell: args.length === 0 && opts.shell === true
+		};
+		const child = spawn(cmd, args, spawnOpts);
 		child.on('close', (code) => resolve({ status: code ?? 0 }));
 	});
 }
@@ -532,6 +536,11 @@ async function main() {
 		runNpx(['skills', 'find'], { cwd: process.cwd(), stdio: 'inherit' });
 	} else if (skillChoice === 'mota') {
 		runNpx(['skills', 'add', 'bchainhub/mota-skills'], { cwd: process.cwd(), stdio: 'inherit' });
+		for (;;) {
+			const another = await text({ message: 'Add another skill repo? (empty to finish)', placeholder: 'owner/repo' });
+			if (isCancel(another) || !another || !another.trim()) break;
+			runNpx(['skills', 'add', another.trim()], { cwd: process.cwd(), stdio: 'inherit' });
+		}
 	} else if (skillChoice === 'custom') {
 		let repo = await text({ message: 'Repo (owner/repo or URL; empty to skip)', placeholder: 'owner/repo' });
 		if (!isCancel(repo) && repo && repo.trim()) {

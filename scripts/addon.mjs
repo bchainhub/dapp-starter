@@ -102,8 +102,10 @@ function removeKeys(target, removeSpec) {
 	return out;
 }
 
+const I18N_INDENT = '\t';
+
 function objectToTs(obj, indent = 0) {
-	const pad = '  '.repeat(indent);
+	const pad = I18N_INDENT.repeat(indent);
 
 	if (Array.isArray(obj)) {
 		return `[${obj.map((x) => objectToTs(x, indent)).join(', ')}]`;
@@ -118,7 +120,7 @@ function objectToTs(obj, indent = 0) {
 		const lines = ['{'];
 		for (const [key, value] of entries) {
 			const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-			lines.push(`${pad}  ${safeKey}: ${objectToTs(value, indent + 1)},`);
+			lines.push(`${pad}${I18N_INDENT}${safeKey}: ${objectToTs(value, indent + 1)},`);
 		}
 		lines.push(`${pad}}`);
 		return lines.join('\n');
@@ -428,15 +430,15 @@ function parseTsObjectToPlain(map) {
 	return out;
 }
 
-/** Serialize parsed map (key -> __rawObject | __expr) back to TS object string. */
+/** Serialize parsed map (key -> __rawObject | __expr) back to TS object string. Uses tabs for i18n output. */
 function mapToTsRaw(map) {
 	const lines = [];
 	for (const [key, value] of Object.entries(map)) {
 		const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
 		if (value && value.__rawObject !== undefined) {
-			lines.push(`  ${safeKey}: ${value.__rawObject},`);
+			lines.push(`${I18N_INDENT}${safeKey}: ${value.__rawObject},`);
 		} else if (value && value.__expr !== undefined) {
-			lines.push(`  ${safeKey}: ${value.__expr},`);
+			lines.push(`${I18N_INDENT}${safeKey}: ${value.__expr},`);
 		}
 	}
 	return '{\n' + lines.join('\n') + '\n}';
@@ -549,8 +551,7 @@ function runTypesafeI18n() {
 	if (dryRun) return;
 	const result = spawnSync('npx', ['typesafe-i18n', '--no-watch'], {
 		cwd,
-		stdio: 'inherit',
-		shell: true
+		stdio: 'inherit'
 	});
 	if (result.status !== 0) {
 		console.warn('[addon] typesafe-i18n failed or is not installed; i18n types may be out of date.');
