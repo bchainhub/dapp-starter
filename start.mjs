@@ -168,7 +168,7 @@ function composeReadme(opts) {
 	const lines = [
 		`# ${opts.projectName}`,
 		'',
-		'MOTA dApp (SvelteKit, Core Blockchain, multi-chain).',
+		'MOTA ĐApp Framework ₡ore (SvelteKit, Core Blockchain, multi-chain).',
 		'',
 		'## Overview',
 		'',
