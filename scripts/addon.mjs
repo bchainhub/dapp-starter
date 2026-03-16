@@ -402,9 +402,10 @@ function mapToTsRaw(map) {
 	return '{\n' + lines.join('\n') + '\n}';
 }
 
+/** Apply _lang files into src/i18n/<lang>/index.ts. Returns true if any file was written. */
 function applyHiddenLang(actionDir, locals) {
-	if (noTranslations) return;
-
+	if (noTranslations) return false;
+	let applied = false;
 	const langEntries = [];
 	for (const dir of searchDirs(actionDir, '_lang')) {
 		const isLangDir = path.basename(dir) === '_lang';
@@ -499,6 +500,20 @@ function applyHiddenLang(actionDir, locals) {
 		const newRootRaw = mapToTsRaw(rootMap);
 		const next = src.slice(0, rootBlock.start) + newRootRaw + src.slice(rootBlock.end);
 		fs.writeFileSync(i18nPath, next);
+		applied = true;
+	}
+	return applied;
+}
+
+function runTypesafeI18n() {
+	if (dryRun) return;
+	const result = spawnSync('npx', ['typesafe-i18n', '--no-watch'], {
+		cwd,
+		stdio: 'inherit',
+		shell: true
+	});
+	if (result.status !== 0) {
+		console.warn('[addon] typesafe-i18n failed or is not installed; i18n types may be out of date.');
 	}
 }
 
@@ -565,7 +580,8 @@ async function main() {
 	runHygen(locals);
 	runHiddenScript(actionDir, locals);
 	applyHiddenConfig(actionDir, locals);
-	applyHiddenLang(actionDir, locals);
+	const langApplied = applyHiddenLang(actionDir, locals);
+	if (langApplied) runTypesafeI18n();
 
 	if (!useCache) {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
