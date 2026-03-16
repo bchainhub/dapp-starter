@@ -321,6 +321,13 @@ async function pmInstallAsync(cwd, pm) {
 	return runAsync('npm', ['install'], { cwd, stdio: 'pipe' });
 }
 
+function pmRun(cwd, pm, script, args = []) {
+	if (pm === 'pnpm') return run('pnpm', ['run', script, ...args], { cwd, stdio: 'pipe' });
+	if (pm === 'yarn') return run('yarn', [script, ...args], { cwd, stdio: 'pipe' });
+	if (pm === 'bun') return run('bun', ['run', script, ...args], { cwd, stdio: 'pipe' });
+	return run('npm', ['run', script, ...args], { cwd, stdio: 'pipe' });
+}
+
 function getProjectDir() {
 	const cwd = process.cwd();
 	if (
@@ -593,6 +600,13 @@ async function main() {
 				templateMerged = true;
 				log.success('MOTA template merged.');
 				await pmInstallAsync(process.cwd(), pm);
+				// Generate typesafe-i18n output (i18n-types.ts, i18n-util*.ts, i18n-svelte.ts) when translations were installed
+				if (installTranslations) {
+					const i18nResult = pmRun(projectCwd, pm, 'i18n:extract');
+					if (i18nResult.status !== 0) {
+						log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
+					}
+				}
 			} else {
 				log.error('Failed to clone template.');
 			}
