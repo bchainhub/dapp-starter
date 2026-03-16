@@ -84,6 +84,15 @@ npx addon owner/repo auth install -c
 npx addon owner/repo auth install -d
 ```
 
+**Versioning:** You can pin a release, branch, or commit by appending `#<ref>` to the repo (the addon uses tiged, which supports git refs). For example, for release `1.2.3` use a tag such as `v1.2.3` or `1.2.3`:
+
+```bash
+npx addon owner/repo#v1.2.3 auth install
+npx addon owner/repo#1.2.3 auth install
+```
+
+Use `#branch` for a branch or `#<commit-hash>` for a specific commit.
+
 **Options (short and long):**
 
 | Flag | Short | Effect |
