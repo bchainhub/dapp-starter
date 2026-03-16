@@ -229,6 +229,10 @@ They are:
 - never copied into the user project
 - currently applied to the `modules` block in `vite.config.ts`
 
+**Important:** This config is **client-side**. Never put secrets or server-only configuration here—it can end up in the client bundle.
+
+For secrets and server config, use the official SvelteKit approach: `$env/static/private`, `$env/dynamic/private`, or Vite’s `import.meta.env` (e.g. `VITE_*` for public env vars only).
+
 Use `_config.ejs.json5` when you want prompt values interpolated before merge:
 
 ```json5
@@ -302,7 +306,7 @@ Skip translation application with `-nt` or `--no-translations`.
 
 ## Config merge behavior
 
-The hidden config file is merged into the `modules` object in `vite.config.ts`.
+The hidden config file is merged into the `modules` object in `vite.config.ts`. Remember: this is client-visible config—no secrets or server-only values (use SvelteKit `$env/*/private` or Vite `import.meta.env` instead).
 
 Supported behavior:
 
