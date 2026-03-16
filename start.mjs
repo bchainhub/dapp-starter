@@ -158,12 +158,14 @@ function addScriptsToPackageJson(pkgPath, scripts) {
 
 function composeReadme(opts) {
 	const runDev =
+		opts.pm === 'deno' ? 'deno task dev' :
 		opts.pm === 'pnpm' ? 'pnpm dev' :
 		opts.pm === 'yarn' ? 'yarn dev' :
 		opts.pm === 'bun' ? 'bun run dev' :
 		'npm run dev';
 
 	const installCmd =
+		opts.pm === 'deno' ? 'deno run npm:install' :
 		opts.pm === 'pnpm' ? 'pnpm install' :
 		opts.pm === 'yarn' ? 'yarn' :
 		opts.pm === 'bun' ? 'bun install' :
@@ -266,6 +268,8 @@ function composeReadme(opts) {
 }
 
 function detectPm(cwd) {
+	if (fs.existsSync(path.join(cwd, 'deno.lock'))) return 'deno';
+	if (fs.existsSync(path.join(cwd, 'deno.json')) || fs.existsSync(path.join(cwd, 'deno.jsonc'))) return 'deno';
 	if (fs.existsSync(path.join(cwd, 'pnpm-lock.yaml'))) return 'pnpm';
 	if (fs.existsSync(path.join(cwd, 'bun.lockb'))) return 'bun';
 	if (fs.existsSync(path.join(cwd, 'yarn.lock'))) return 'yarn';
@@ -274,6 +278,7 @@ function detectPm(cwd) {
 
 function pmAdd(cwd, pm, ...pkgs) {
 	if (pkgs.length === 0) return { status: 0 };
+	if (pm === 'deno') return run('deno', ['add', ...pkgs.map((p) => 'npm:' + p)], { cwd });
 	if (pm === 'pnpm') return run('pnpm', ['add', ...pkgs], { cwd });
 	if (pm === 'yarn') return run('yarn', ['add', ...pkgs], { cwd });
 	if (pm === 'bun') return run('bun', ['add', ...pkgs], { cwd });
@@ -282,6 +287,7 @@ function pmAdd(cwd, pm, ...pkgs) {
 
 function pmAddDev(cwd, pm, ...pkgs) {
 	if (pkgs.length === 0) return { status: 0 };
+	if (pm === 'deno') return run('deno', ['add', ...pkgs.map((p) => 'npm:' + p)], { cwd });
 	if (pm === 'pnpm') return run('pnpm', ['add', '-D', ...pkgs], { cwd });
 	if (pm === 'yarn') return run('yarn', ['add', ...pkgs], { cwd });
 	if (pm === 'bun') return run('bun', ['add', '-d', ...pkgs], { cwd });
@@ -289,6 +295,7 @@ function pmAddDev(cwd, pm, ...pkgs) {
 }
 
 function pmRemove(cwd, pm, pkg) {
+	if (pm === 'deno') return run('deno', ['remove', pkg], { cwd });
 	if (pm === 'pnpm') return run('pnpm', ['remove', pkg], { cwd });
 	if (pm === 'yarn') return run('yarn', ['remove', pkg], { cwd });
 	if (pm === 'bun') return run('bun', ['remove', pkg], { cwd });
@@ -296,6 +303,7 @@ function pmRemove(cwd, pm, pkg) {
 }
 
 function pmInstall(cwd, pm) {
+	if (pm === 'deno') return run('deno', ['run', 'npm:install'], { cwd });
 	if (pm === 'pnpm') return run('pnpm', ['install'], { cwd });
 	if (pm === 'yarn') return run('yarn', ['install'], { cwd });
 	if (pm === 'bun') return run('bun', ['install'], { cwd });
@@ -304,6 +312,7 @@ function pmInstall(cwd, pm) {
 
 async function pmAddAsync(cwd, pm, ...pkgs) {
 	if (pkgs.length === 0) return { status: 0 };
+	if (pm === 'deno') return runAsync('deno', ['add', ...pkgs.map((p) => 'npm:' + p)], { cwd, stdio: 'pipe' });
 	if (pm === 'pnpm') return runAsync('pnpm', ['add', ...pkgs], { cwd, stdio: 'pipe' });
 	if (pm === 'yarn') return runAsync('yarn', ['add', ...pkgs], { cwd, stdio: 'pipe' });
 	if (pm === 'bun') return runAsync('bun', ['add', ...pkgs], { cwd, stdio: 'pipe' });
@@ -312,6 +321,7 @@ async function pmAddAsync(cwd, pm, ...pkgs) {
 
 async function pmAddDevAsync(cwd, pm, ...pkgs) {
 	if (pkgs.length === 0) return { status: 0 };
+	if (pm === 'deno') return runAsync('deno', ['add', ...pkgs.map((p) => 'npm:' + p)], { cwd, stdio: 'pipe' });
 	if (pm === 'pnpm') return runAsync('pnpm', ['add', '-D', ...pkgs], { cwd, stdio: 'pipe' });
 	if (pm === 'yarn') return runAsync('yarn', ['add', ...pkgs], { cwd, stdio: 'pipe' });
 	if (pm === 'bun') return runAsync('bun', ['add', '-d', ...pkgs], { cwd, stdio: 'pipe' });
@@ -319,6 +329,7 @@ async function pmAddDevAsync(cwd, pm, ...pkgs) {
 }
 
 async function pmInstallAsync(cwd, pm) {
+	if (pm === 'deno') return runAsync('deno', ['run', 'npm:install'], { cwd, stdio: 'pipe' });
 	if (pm === 'pnpm') return runAsync('pnpm', ['install'], { cwd, stdio: 'pipe' });
 	if (pm === 'yarn') return runAsync('yarn', ['install'], { cwd, stdio: 'pipe' });
 	if (pm === 'bun') return runAsync('bun', ['install'], { cwd, stdio: 'pipe' });
@@ -326,6 +337,7 @@ async function pmInstallAsync(cwd, pm) {
 }
 
 function pmRun(cwd, pm, script, args = []) {
+	if (pm === 'deno') return run('deno', ['task', script, ...args], { cwd, stdio: 'pipe' });
 	if (pm === 'pnpm') return run('pnpm', ['run', script, ...args], { cwd, stdio: 'pipe' });
 	if (pm === 'yarn') return run('yarn', [script, ...args], { cwd, stdio: 'pipe' });
 	if (pm === 'bun') return run('bun', ['run', script, ...args], { cwd, stdio: 'pipe' });
@@ -391,7 +403,7 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	const { baseUrl, refFromUrl } = parseTemplateUrl(tplUrl);
 	const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 	const ref = refFromUrl ?? tplVersion ?? getDefaultBranch(tpl);
-	s1.start(`Cloning template (${ref})…`);
+	s1.start(`Cloning template (${ref})`);
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-update-'));
 	const cloneDir = path.join(tmpDir, 'clone');
 	const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -404,7 +416,7 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	}
 	s1.stop('Template cloned.');
 
-	s1.start('Copying files (excluding vite.config.ts)…');
+	s1.start('Copying files (excluding vite.config.ts)');
 	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
 	if (viteBackup !== null) {
 		fs.writeFileSync(vitePath, viteBackup);
@@ -425,7 +437,7 @@ async function main() {
 	intro('Dapp Starter');
 
 	const s1 = spinner({ frames: randomEmojiFrames(), delay: 300 });
-	s1.start('Creating SvelteKit project…');
+	s1.start('Creating SvelteKit project');
 	const svResult = run('npx', ['sv', 'create', ...passArgs], { stdio: 'inherit' });
 	s1.stop(svResult.status === 0 ? 'SvelteKit project created.' : 'sv create finished.');
 	if (svResult.status !== 0) {
@@ -433,7 +445,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	s1.start('Preparing…');
+	s1.start('Preparing');
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
@@ -445,7 +457,7 @@ async function main() {
 	log.step(`Package manager: ${pm}`);
 	s1.stop('Ready.');
 
-	s1.start('Installing base packages…');
+	s1.start('Installing base packages');
 	await pmAddAsync(process.cwd(), pm,
 		'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
 		'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
@@ -492,7 +504,7 @@ async function main() {
 	pkg.devDependencies.prompts = pkg.devDependencies.prompts || '*';
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
-	s1.start('Running package install…');
+	s1.start('Running package install');
 	await pmInstallAsync(process.cwd(), pm);
 	s1.stop('Package install done.');
 
@@ -505,7 +517,7 @@ async function main() {
 		process.exit(0);
 	}
 	if (installTranslations) {
-		s1.start('Installing typesafe-i18n…');
+		s1.start('Installing typesafe-i18n');
 		await pmAddAsync(process.cwd(), pm, 'typesafe-i18n');
 		addScriptsToPackageJson(pkgPath, {
 			'typesafe-i18n': 'typesafe-i18n',
@@ -597,7 +609,7 @@ async function main() {
 			const { baseUrl, refFromUrl } = parseTemplateUrl(templateUrl);
 			const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 			const ref = refFromUrl ?? templateVersion ?? getDefaultBranch(tpl);
-			s1.start(`Cloning and merging template (${ref})…`);
+			s1.start(`Cloning and merging template (${ref})`);
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-'));
 			const cloneDir = path.join(tmpDir, 'clone');
 			const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
@@ -653,7 +665,7 @@ async function main() {
 		}
 		if (excludeLockfiles) {
 			fs.appendFileSync(gi, '\n# Lock files\n');
-			for (const lock of ['/package-lock.json', '/pnpm-lock.yaml', '/yarn.lock', '/bun.lockb', '/npm-shrinkwrap.json', '/shrinkwrap.yaml', '/.pnp.cjs', '/.pnp.loader.mjs']) {
+			for (const lock of ['/package-lock.json', '/pnpm-lock.yaml', '/yarn.lock', '/bun.lockb', '/deno.lock', '/npm-shrinkwrap.json', '/shrinkwrap.yaml', '/.pnp.cjs', '/.pnp.loader.mjs']) {
 				appendIfMissing(gi, lock);
 			}
 		}
@@ -958,17 +970,22 @@ async function main() {
 		}
 	}
 
-	s1.start('Updating packages to latest (ncu)…');
-	const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
-	const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
-	const ncuPresent = deps && 'npm-check-updates' in deps;
-	if (!ncuPresent) {
-		await pmAddDevAsync(process.cwd(), pm, 'npm-check-updates');
-	}
-	await runNpxAsync(['npm-check-updates', '-u'], { cwd: process.cwd() });
-	await pmInstallAsync(process.cwd(), pm);
-	if (!ncuPresent) {
-		pmRemove(process.cwd(), pm, 'npm-check-updates');
+	s1.start('Updating packages to latest (ncu)');
+	const ncuPkgPath = path.join(process.cwd(), 'package.json');
+	if (fs.existsSync(ncuPkgPath)) {
+		const pkgJson = JSON.parse(fs.readFileSync(ncuPkgPath, 'utf8'));
+		const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
+		const ncuPresent = deps && 'npm-check-updates' in deps;
+		if (!ncuPresent && pm !== 'deno') {
+			await pmAddDevAsync(process.cwd(), pm, 'npm-check-updates');
+		}
+		if (pm !== 'deno') {
+			await runNpxAsync(['npm-check-updates', '-u'], { cwd: process.cwd() });
+			if (!ncuPresent) {
+				pmRemove(process.cwd(), pm, 'npm-check-updates');
+			}
+		}
+		await pmInstallAsync(process.cwd(), pm);
 	}
 	s1.stop('Packages updated.');
 
@@ -1006,9 +1023,10 @@ async function main() {
 		if (commitResult.status !== 0) log.info('Nothing to commit or already committed.');
 	}
 
+	const devCmd = pm === 'deno' ? 'deno task dev' : pm === 'pnpm' ? 'pnpm dev' : pm === 'yarn' ? 'yarn dev' : pm === 'bun' ? 'bun run dev' : 'npm run dev';
 	outro('✨ Setup complete.');
 	log.success(`🎉 Project ready at: ${process.cwd()}`);
-	log.message(`🚀 Next: cd ${process.cwd()} && npm run dev -- --open`);
+	log.message(`🚀 Next: cd ${process.cwd()} && ${devCmd} -- --open`);
 }
 
 main().catch((err) => {
