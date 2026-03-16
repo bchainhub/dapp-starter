@@ -434,7 +434,7 @@ async function main() {
 		return;
 	}
 
-	intro('Dapp Starter');
+	intro('MOTA - ĐApp Starter 🖋️');
 
 	const s1 = spinner({ frames: randomEmojiFrames(), delay: 300 });
 	s1.start('Creating SvelteKit project');
