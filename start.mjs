@@ -170,7 +170,7 @@ function copyAdditionalTranslations(projectCwd, localeCodes) {
 	const srcI18n = path.join(projectCwd, 'src', 'i18n');
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mota-translations-'));
 	const cloneDir = path.join(tmpDir, 'repo');
-	const cloneResult = run('git', ['clone', '--depth=1', MOTA_TRANSLATIONS_REPO, cloneDir], { stdio: 'pipe' });
+	const cloneResult = run('git', ['clone', '--depth=1', MOTA_TRANSLATIONS_REPO, cloneDir], { stdio: 'ignore' });
 	if (cloneResult.status !== 0) {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 		return { success: false, copied: [] };
@@ -706,31 +706,35 @@ async function main() {
 			const { baseUrl, refFromUrl } = parseTemplateUrl(templateUrl);
 			const tpl = baseUrl.replace(/\.git$/, '') + '.git';
 			const ref = refFromUrl ?? templateVersion ?? getDefaultBranch(tpl);
-			s1.start(`Cloning and merging template (${ref})`);
+			// Don't run spinner during blocking git/tar so TTY state stays clean for later prompts
+			log.step(`Cloning and merging template (${ref})`);
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-starter-'));
 			const cloneDir = path.join(tmpDir, 'clone');
 			const cloneArgs = ['clone', '--depth=1', '-b', ref, tpl, cloneDir];
-			const cloneResult = run('git', cloneArgs, { stdio: 'pipe' });
+			const cloneResult = run('git', cloneArgs, { stdio: 'ignore' });
 
 			if (cloneResult.status === 0) {
 				const projectCwd = process.cwd();
 				run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${projectCwd}"`], { stdio: 'pipe' });
 				templateMerged = true;
 				log.success('MOTA template merged.');
+				s1.start('Installing dependencies');
 				await pmInstallAsync(process.cwd(), pm);
-				// Copy additional translations from mota-translations when user chose some
+				s1.stop('Dependencies installed.');
+				// Copy additional translations from mota-translations when user chose some (no spinner during blocking git clone to avoid TTY corruption)
 				if (installTranslations && additionalTranslationLocales !== null) {
 					const wantAll = additionalTranslationLocales.length === 1 && additionalTranslationLocales[0] === 'all';
 					const toInstall = wantAll ? 'all' : additionalTranslationLocales;
 					if (toInstall === 'all' || toInstall.length > 0) {
-						s1.start('Copying additional translations from mota-translations');
+						log.step('Copying additional translations from mota-translations');
 						const { success, copied } = copyAdditionalTranslations(projectCwd, toInstall);
 						if (success && copied.length > 0) {
 							log.success(`Copied locales: ${copied.join(', ')}`);
 						} else if (!success) {
 							log.warn('Failed to clone or copy from mota-translations.');
+						} else {
+							log.success('Additional translations done.');
 						}
-						s1.stop('Additional translations done.');
 					}
 				}
 				// i18n:extract is run after all prompts (below) so the TTY/spinner state is not corrupted.
@@ -739,7 +743,7 @@ async function main() {
 			}
 
 			fs.rmSync(tmpDir, { recursive: true, force: true });
-			s1.stop('Done.');
+			log.success('Template merge done.');
 		}
 	}
 
@@ -748,11 +752,11 @@ async function main() {
 		const wantAll = additionalTranslationLocales.length === 1 && additionalTranslationLocales[0] === 'all';
 		const toInstall = wantAll ? 'all' : additionalTranslationLocales;
 		if (toInstall === 'all' || toInstall.length > 0) {
-			s1.start('Copying additional translations from mota-translations');
+			log.step('Copying additional translations from mota-translations');
 			const { success, copied } = copyAdditionalTranslations(process.cwd(), toInstall);
 			if (success && copied.length > 0) log.success(`Copied locales: ${copied.join(', ')}`);
 			else if (!success) log.warn('Failed to clone or copy from mota-translations.');
-			s1.stop('Additional translations done.');
+			else log.success('Additional translations done.');
 		}
 	}
 
