@@ -576,12 +576,7 @@ async function main() {
 			'i18n:watch': 'typesafe-i18n'
 		});
 		s1.stop('typesafe-i18n installed.');
-		s1.start('Initializing i18n types (typesafe-i18n)');
-		const i18nInitResult = pmRun(process.cwd(), pm, 'i18n:extract');
-		if (i18nInitResult.status !== 0) {
-			log.warn('typesafe-i18n generation failed; run i18n:extract (or pnpm/yarn/bun equivalent) manually.');
-		}
-		s1.stop('i18n types initialized.');
+		// i18n types are initialized after template merge and/or additional translations (so all languages are present)
 
 		const additionalInput = await text({
 			message: 'Install additional translations from bchainhub/mota-translations?',
@@ -720,14 +715,14 @@ async function main() {
 						s1.stop('Additional translations done.');
 					}
 				}
-				// Generate typesafe-i18n output (i18n-types.ts, i18n-util*.ts, i18n-svelte.ts) when translations were installed
+				// Generate typesafe-i18n output (i18n-types.ts, i18n-util*.ts, i18n-svelte.ts) from locale files
 				if (installTranslations) {
-					s1.start('Updating i18n types (typesafe-i18n)');
+					s1.start('Generating i18n types from locale files (typesafe-i18n)');
 					const i18nResult = pmRun(projectCwd, pm, 'i18n:extract');
 					if (i18nResult.status !== 0) {
 						log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
 					}
-					s1.stop('i18n types updated.');
+					s1.stop('i18n types generated.');
 				}
 			} else {
 				log.error('Failed to clone template.');
@@ -738,7 +733,7 @@ async function main() {
 		}
 	}
 
-	// When user skipped template merge but chose additional translations, copy and run i18n:extract now
+	// When user skipped template merge: copy additional translations if any, then run i18n:extract once (so types include all languages)
 	if (!templateMerged && installTranslations && additionalTranslationLocales !== null) {
 		const wantAll = additionalTranslationLocales.length === 1 && additionalTranslationLocales[0] === 'all';
 		const toInstall = wantAll ? 'all' : additionalTranslationLocales;
@@ -748,13 +743,13 @@ async function main() {
 			if (success && copied.length > 0) log.success(`Copied locales: ${copied.join(', ')}`);
 			else if (!success) log.warn('Failed to clone or copy from mota-translations.');
 			s1.stop('Additional translations done.');
-			s1.start('Updating i18n types (typesafe-i18n)');
-			const i18nResult = pmRun(process.cwd(), pm, 'i18n:extract');
-			if (i18nResult.status !== 0) {
-				log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
-			}
-			s1.stop('i18n types updated.');
 		}
+		s1.start('Generating i18n types from locale files (typesafe-i18n)');
+		const i18nResult = pmRun(process.cwd(), pm, 'i18n:extract');
+		if (i18nResult.status !== 0) {
+			log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
+		}
+		s1.stop('i18n types generated.');
 	}
 
 	if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
