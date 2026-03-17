@@ -35,7 +35,7 @@ const MOTA_TRANSLATIONS_REPO = 'https://github.com/bchainhub/mota-translations.g
 const STARTER_REPO_RAW = 'https://cdn.jsdelivr.net/gh/bchainhub/dapp-starter';
 const CORE_LICENSE_URL = 'https://cdn.jsdelivr.net/gh/bchainhub/core-license@main/LICENSE';
 
-/** Files/folders to skip when listing locale folders in mota-translations repo root. */
+/** Names to skip when listing locale subfolders inside mota-translations repo i18n/ folder. */
 const MOTA_TRANSLATIONS_SKIP_NAMES = new Set(['.git', 'README.md', 'LICENSE', '.gitignore', 'node_modules']);
 
 // Ctrl+C exits immediately (including during sv create)
@@ -161,13 +161,14 @@ function addScriptsToPackageJson(pkgPath, scripts) {
 }
 
 /**
- * Copy additional translation locales from mota-translations repo into project src/i18n.
+ * Copy translation locales from mota-translations repo (repo i18n/ folder) into project src/i18n.
+ * Creates src/i18n if it does not exist.
  * @param {string} projectCwd - Project root
  * @param {string[] | 'all'} localeCodes - Array of locale codes (e.g. ['es', 'pt-br']) or 'all'
  * @returns {{ success: boolean, copied: string[] }}
  */
 function copyAdditionalTranslations(projectCwd, localeCodes) {
-	const srcI18n = path.join(projectCwd, 'src', 'i18n');
+	const destI18n = path.join(projectCwd, 'src', 'i18n');
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mota-translations-'));
 	const cloneDir = path.join(tmpDir, 'repo');
 	const cloneResult = run('git', ['clone', '--depth=1', MOTA_TRANSLATIONS_REPO, cloneDir], { stdio: 'ignore' });
@@ -175,7 +176,12 @@ function copyAdditionalTranslations(projectCwd, localeCodes) {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 		return { success: false, copied: [] };
 	}
-	const entries = fs.readdirSync(cloneDir, { withFileTypes: true });
+	const repoI18n = path.join(cloneDir, 'i18n');
+	if (!fs.existsSync(repoI18n) || !fs.statSync(repoI18n).isDirectory()) {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+		return { success: false, copied: [] };
+	}
+	const entries = fs.readdirSync(repoI18n, { withFileTypes: true });
 	const availableLocales = entries
 		.filter((e) => e.isDirectory() && !MOTA_TRANSLATIONS_SKIP_NAMES.has(e.name))
 		.map((e) => e.name);
@@ -183,10 +189,10 @@ function copyAdditionalTranslations(projectCwd, localeCodes) {
 		? availableLocales
 		: localeCodes.filter((code) => availableLocales.includes(code));
 	const copied = [];
-	if (!fs.existsSync(srcI18n)) fs.mkdirSync(srcI18n, { recursive: true });
+	if (!fs.existsSync(destI18n)) fs.mkdirSync(destI18n, { recursive: true });
 	for (const locale of toCopy) {
-		const srcLocale = path.join(cloneDir, locale);
-		const destLocale = path.join(srcI18n, locale);
+		const srcLocale = path.join(repoI18n, locale);
+		const destLocale = path.join(destI18n, locale);
 		if (!fs.existsSync(srcLocale) || !fs.statSync(srcLocale).isDirectory()) continue;
 		fs.mkdirSync(destLocale, { recursive: true });
 		const files = fs.readdirSync(srcLocale, { withFileTypes: true });
