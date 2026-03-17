@@ -776,12 +776,15 @@ async function main() {
 		log.success('Initialized git repository.');
 	}
 
-	const excludeLockfiles = process.stdin.isTTY
-		? await confirm({
-				message: 'Exclude lock files via .gitignore (cleaner, avoid cross-PM conflicts)?',
-				initialValue: true
-			})
-		: true;
+	// After i18n:extract (when installTranslations was used), give the TTY a moment so the next prompt accepts input.
+	if (installTranslations) {
+		await new Promise((r) => setTimeout(r, 300));
+	}
+
+	const excludeLockfiles = await confirm({
+		message: 'Exclude lock files via .gitignore (cleaner, avoid cross-PM conflicts)?',
+		initialValue: true
+	});
 	if (!isCancel(excludeLockfiles)) {
 		const gi = path.join(process.cwd(), '.gitignore');
 		if (!fs.existsSync(gi)) fs.writeFileSync(gi, '');
@@ -935,7 +938,8 @@ async function main() {
 			{ value: '12', label: 'Unlicense' },
 			{ value: '13', label: 'CC0-1.0' },
 			{ value: '14', label: 'ISC' },
-			{ value: '15', label: 'EPL-2.0' }
+			{ value: '15', label: 'EPL-2.0' },
+			{ value: '16', label: 'WTFPL' }
 		],
 		initialValue: '3'
 	});
@@ -947,7 +951,7 @@ async function main() {
 	const spdxKeys = {
 		'4': 'MIT', '5': 'Apache-2.0', '6': 'GPL-3.0-or-later', '7': 'AGPL-3.0-or-later',
 		'8': 'LGPL-3.0-or-later', '9': 'BSD-2-Clause', '10': 'BSD-3-Clause', '11': 'MPL-2.0',
-		'12': 'Unlicense', '13': 'CC0-1.0', '14': 'ISC', '15': 'EPL-2.0'
+		'12': 'Unlicense', '13': 'CC0-1.0', '14': 'ISC', '15': 'EPL-2.0', '16': 'WTFPL'
 	};
 	const SPDX_RAW = 'https://raw.githubusercontent.com/spdx/license-list-data/main/text';
 	const spdxUrls = {
@@ -962,7 +966,8 @@ async function main() {
 		'12': `${SPDX_RAW}/Unlicense.txt`,
 		'13': `${SPDX_RAW}/CC0-1.0.txt`,
 		'14': `${SPDX_RAW}/ISC.txt`,
-		'15': `${SPDX_RAW}/EPL-2.0.txt`
+		'15': `${SPDX_RAW}/EPL-2.0.txt`,
+		'16': `${SPDX_RAW}/WTFPL.txt`
 	};
 	let licenseLabel = 'None';
 	let licenseWritten = false;
@@ -1023,6 +1028,21 @@ async function main() {
 					let body = await res.text();
 					const year = new Date().getFullYear();
 					body = body.replace(/<year>/g, String(year));
+					// WTFPL: replace 4th line (Copyright (C) 2004 Sam Hocevar...) with optional user name
+					if (licChoice === '16') {
+						const orgInput = await text({
+							message: 'Copyright holder (optional)',
+							placeholder: 'e.g. Ryker Walker or Company Name',
+							initialValue: ''
+						});
+						const name = !isCancel(orgInput) && typeof orgInput === 'string' ? String(orgInput).trim() : '';
+						const wtfplCopyrightLine = /^Copyright\s*\(C\)\s*\d{4}\s+Sam Hocevar\s+<[^>]+>\s*$/m;
+						if (name) {
+							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year} ${name}\n`);
+						} else {
+							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year}`);
+						}
+					}
 					const needsCopyrightHolder = /<copyright holders?>/i.test(body);
 					if (needsCopyrightHolder) {
 						const orgInput = await text({
