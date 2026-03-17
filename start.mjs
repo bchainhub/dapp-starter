@@ -385,12 +385,20 @@ async function pmInstallAsync(cwd, pm) {
 	return runAsync('npm', ['install'], { cwd, stdio: 'pipe' });
 }
 
-function pmRun(cwd, pm, script, args = []) {
-	if (pm === 'deno') return run('deno', ['task', script, ...args], { cwd, stdio: 'pipe' });
-	if (pm === 'pnpm') return run('pnpm', ['run', script, ...args], { cwd, stdio: 'pipe' });
-	if (pm === 'yarn') return run('yarn', [script, ...args], { cwd, stdio: 'pipe' });
-	if (pm === 'bun') return run('bun', ['run', script, ...args], { cwd, stdio: 'pipe' });
-	return run('npm', ['run', script, ...args], { cwd, stdio: 'pipe' });
+/**
+ * @param {string} cwd
+ * @param {string} pm
+ * @param {string} script
+ * @param {string[]} [args]
+ * @param {{ stdio?: 'pipe' | 'ignore' }} [opts] - Use stdio: 'ignore' so child doesn't block on stdin or affect terminal (e.g. for i18n:extract before more prompts).
+ */
+function pmRun(cwd, pm, script, args = [], opts = {}) {
+	const stdio = opts.stdio ?? 'pipe';
+	if (pm === 'deno') return run('deno', ['task', script, ...args], { cwd, stdio });
+	if (pm === 'pnpm') return run('pnpm', ['run', script, ...args], { cwd, stdio });
+	if (pm === 'yarn') return run('yarn', [script, ...args], { cwd, stdio });
+	if (pm === 'bun') return run('bun', ['run', script, ...args], { cwd, stdio });
+	return run('npm', ['run', script, ...args], { cwd, stdio });
 }
 
 function getProjectDir() {
@@ -716,9 +724,10 @@ async function main() {
 					}
 				}
 				// Generate typesafe-i18n output (i18n-types.ts, i18n-util*.ts, i18n-svelte.ts) from locale files
+				// Use stdio: 'ignore' so child doesn't block on stdin or leave terminal in a state that breaks the next prompt.
 				if (installTranslations) {
 					s1.start('Generating i18n types from locale files (typesafe-i18n)');
-					const i18nResult = pmRun(projectCwd, pm, 'i18n:extract');
+					const i18nResult = pmRun(projectCwd, pm, 'i18n:extract', [], { stdio: 'ignore' });
 					if (i18nResult.status !== 0) {
 						log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
 					}
@@ -745,7 +754,7 @@ async function main() {
 			s1.stop('Additional translations done.');
 		}
 		s1.start('Generating i18n types from locale files (typesafe-i18n)');
-		const i18nResult = pmRun(process.cwd(), pm, 'i18n:extract');
+		const i18nResult = pmRun(process.cwd(), pm, 'i18n:extract', [], { stdio: 'ignore' });
 		if (i18nResult.status !== 0) {
 			log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
 		}
@@ -757,10 +766,12 @@ async function main() {
 		log.success('Initialized git repository.');
 	}
 
-	const excludeLockfiles = await confirm({
-		message: 'Exclude lock files via .gitignore (cleaner, avoid cross-PM conflicts)?',
-		initialValue: true
-	});
+	const excludeLockfiles = process.stdin.isTTY
+		? await confirm({
+				message: 'Exclude lock files via .gitignore (cleaner, avoid cross-PM conflicts)?',
+				initialValue: true
+			})
+		: true;
 	if (!isCancel(excludeLockfiles)) {
 		const gi = path.join(process.cwd(), '.gitignore');
 		if (!fs.existsSync(gi)) fs.writeFileSync(gi, '');
@@ -1006,7 +1017,7 @@ async function main() {
 					if (needsCopyrightHolder) {
 						const orgInput = await text({
 							message: 'Copyright holder',
-							placeholder: 'e.g. Jane Doe or Company Name',
+							placeholder: 'e.g. Ryker Walker or Company Name',
 							initialValue: ''
 						});
 						const name = !isCancel(orgInput) && typeof orgInput === 'string' ? String(orgInput).trim() : '';
@@ -1016,7 +1027,7 @@ async function main() {
 					if (!needsCopyrightHolder && /Copyright\s*\(c\)\s*\n/i.test(body)) {
 						const orgInput = await text({
 							message: 'Copyright holder (optional)',
-							placeholder: 'e.g. Jane Doe or Company Name',
+							placeholder: 'e.g. Ryker Walker or Company Name',
 							initialValue: ''
 						});
 						const name = !isCancel(orgInput) && typeof orgInput === 'string' ? String(orgInput).trim() : '';
