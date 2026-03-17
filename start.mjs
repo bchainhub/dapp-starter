@@ -733,16 +733,7 @@ async function main() {
 						s1.stop('Additional translations done.');
 					}
 				}
-				// Generate typesafe-i18n output (i18n-types.ts, i18n-util*.ts, i18n-svelte.ts) from locale files
-				// Run async with stdio: 'ignore' so event loop stays active and TTY stays responsive for next prompts.
-				if (installTranslations) {
-					s1.start('Generating i18n types from locale files (typesafe-i18n)');
-					const i18nResult = await pmRunAsync(projectCwd, pm, 'i18n:extract', [], { stdio: 'ignore' });
-					if (i18nResult.status !== 0) {
-						log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
-					}
-					s1.stop('i18n types generated.');
-				}
+				// i18n:extract is run after all prompts (below) so the TTY/spinner state is not corrupted.
 			} else {
 				log.error('Failed to clone template.');
 			}
@@ -752,7 +743,7 @@ async function main() {
 		}
 	}
 
-	// When user skipped template merge: copy additional translations if any, then run i18n:extract once (so types include all languages)
+	// When user skipped template merge: copy additional translations if any. i18n:extract runs after all prompts (below).
 	if (!templateMerged && installTranslations && additionalTranslationLocales !== null) {
 		const wantAll = additionalTranslationLocales.length === 1 && additionalTranslationLocales[0] === 'all';
 		const toInstall = wantAll ? 'all' : additionalTranslationLocales;
@@ -763,22 +754,11 @@ async function main() {
 			else if (!success) log.warn('Failed to clone or copy from mota-translations.');
 			s1.stop('Additional translations done.');
 		}
-		s1.start('Generating i18n types from locale files (typesafe-i18n)');
-		const i18nResult = await pmRunAsync(process.cwd(), pm, 'i18n:extract', [], { stdio: 'ignore' });
-		if (i18nResult.status !== 0) {
-			log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
-		}
-		s1.stop('i18n types generated.');
 	}
 
 	if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
 		run('git', ['init'], { stdio: 'pipe' });
 		log.success('Initialized git repository.');
-	}
-
-	// After i18n:extract (when installTranslations was used), give the TTY a moment so the next prompt accepts input.
-	if (installTranslations) {
-		await new Promise((r) => setTimeout(r, 300));
 	}
 
 	const excludeLockfiles = await confirm({
@@ -1085,6 +1065,18 @@ async function main() {
 		licenseLabel = licChoice === '3' ? 'CORE' : (spdxKeys[licChoice] || '');
 		if (!licenseWritten) licenseLabel = 'None';
 	}
+
+	// Run i18n:extract after all prompts so the TTY/spinner is never corrupted by a child process during the prompt flow.
+	if (installTranslations) {
+		log.step('Generating i18n types from locale files (typesafe-i18n)...');
+		const i18nResult = pmRun(process.cwd(), pm, 'i18n:extract', [], { stdio: 'ignore' });
+		if (i18nResult.status !== 0) {
+			log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
+		} else {
+			log.success('i18n types generated.');
+		}
+	}
+
 	const pkgForReadme = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 	const readmePath = path.join(process.cwd(), 'README.md');
 	const readmeContent = composeReadme({
