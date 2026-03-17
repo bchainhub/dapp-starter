@@ -31,8 +31,12 @@ const __dirname = path.dirname(__filename);
 const STARTER_DIR = __dirname;
 
 const TEMPLATE_URL = 'https://github.com/bchainhub/mota-dapp.git';
+const MOTA_TRANSLATIONS_REPO = 'https://github.com/bchainhub/mota-translations.git';
 const STARTER_REPO_RAW = 'https://cdn.jsdelivr.net/gh/bchainhub/dapp-starter';
 const CORE_LICENSE_URL = 'https://cdn.jsdelivr.net/gh/bchainhub/core-license@main/LICENSE';
+
+/** Files/folders to skip when listing locale folders in mota-translations repo root. */
+const MOTA_TRANSLATIONS_SKIP_NAMES = new Set(['.git', 'README.md', 'LICENSE', '.gitignore', 'node_modules']);
 
 // Ctrl+C exits immediately (including during sv create)
 process.on('SIGINT', () => process.exit(130));
@@ -154,6 +158,51 @@ function addScriptsToPackageJson(pkgPath, scripts) {
 	pkg.scripts = pkg.scripts || {};
 	Object.assign(pkg.scripts, scripts);
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+}
+
+/**
+ * Copy additional translation locales from mota-translations repo into project src/i18n.
+ * @param {string} projectCwd - Project root
+ * @param {string[] | 'all'} localeCodes - Array of locale codes (e.g. ['es', 'pt-br']) or 'all'
+ * @returns {{ success: boolean, copied: string[] }}
+ */
+function copyAdditionalTranslations(projectCwd, localeCodes) {
+	const srcI18n = path.join(projectCwd, 'src', 'i18n');
+	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mota-translations-'));
+	const cloneDir = path.join(tmpDir, 'repo');
+	const cloneResult = run('git', ['clone', '--depth=1', MOTA_TRANSLATIONS_REPO, cloneDir], { stdio: 'pipe' });
+	if (cloneResult.status !== 0) {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+		return { success: false, copied: [] };
+	}
+	const entries = fs.readdirSync(cloneDir, { withFileTypes: true });
+	const availableLocales = entries
+		.filter((e) => e.isDirectory() && !MOTA_TRANSLATIONS_SKIP_NAMES.has(e.name))
+		.map((e) => e.name);
+	const toCopy = localeCodes === 'all'
+		? availableLocales
+		: localeCodes.filter((code) => availableLocales.includes(code));
+	const copied = [];
+	if (!fs.existsSync(srcI18n)) fs.mkdirSync(srcI18n, { recursive: true });
+	for (const locale of toCopy) {
+		const srcLocale = path.join(cloneDir, locale);
+		const destLocale = path.join(srcI18n, locale);
+		if (!fs.existsSync(srcLocale) || !fs.statSync(srcLocale).isDirectory()) continue;
+		fs.mkdirSync(destLocale, { recursive: true });
+		const files = fs.readdirSync(srcLocale, { withFileTypes: true });
+		for (const f of files) {
+			const srcPath = path.join(srcLocale, f.name);
+			const destPath = path.join(destLocale, f.name);
+			if (f.isDirectory()) {
+				fs.cpSync(srcPath, destPath, { recursive: true });
+			} else {
+				fs.copyFileSync(srcPath, destPath);
+			}
+		}
+		copied.push(locale);
+	}
+	fs.rmSync(tmpDir, { recursive: true, force: true });
+	return { success: true, copied };
 }
 
 function composeReadme(opts) {
@@ -516,6 +565,8 @@ async function main() {
 		cancel('Cancelled.');
 		process.exit(0);
 	}
+	/** User choice for additional locales: null = not asked, [] = none, ['all'] or ['es','pt-br',...] */
+	let additionalTranslationLocales = null;
 	if (installTranslations) {
 		s1.start('Installing typesafe-i18n');
 		await pmAddAsync(process.cwd(), pm, 'typesafe-i18n');
@@ -531,6 +582,33 @@ async function main() {
 			log.warn('typesafe-i18n generation failed; run i18n:extract (or pnpm/yarn/bun equivalent) manually.');
 		}
 		s1.stop('i18n types initialized.');
+
+		const additionalInput = await text({
+			message: 'Install additional translations from bchainhub/mota-translations?',
+			placeholder: 'es, pt-br, ja or "all" or "none"',
+			validate: (value) => {
+				const v = (value || '').trim().toLowerCase();
+				if (v === '' || v === 'none') return undefined;
+				if (v === 'all') return undefined;
+				const parts = v.split(',').map((s) => s.trim()).filter(Boolean);
+				if (parts.some((p) => !/^[a-z]{2}(-[a-z0-9]{2,8})?$/i.test(p))) {
+					return 'Use comma-separated locale codes (e.g. es, pt-br), or "all", or "none"/empty.';
+				}
+				return undefined;
+			}
+		});
+		if (!isCancel(additionalInput)) {
+			const v = (additionalInput || '').trim().toLowerCase();
+			if (v === '' || v === 'none') {
+				additionalTranslationLocales = [];
+			} else if (v === 'all') {
+				additionalTranslationLocales = ['all'];
+			} else {
+				additionalTranslationLocales = v.split(',').map((s) => s.trim()).filter(Boolean);
+			}
+		} else {
+			additionalTranslationLocales = [];
+		}
 	}
 
 	log.info('Agent skills: https://skills.sh/');
@@ -627,12 +705,29 @@ async function main() {
 				templateMerged = true;
 				log.success('MOTA template merged.');
 				await pmInstallAsync(process.cwd(), pm);
+				// Copy additional translations from mota-translations when user chose some
+				if (installTranslations && additionalTranslationLocales !== null) {
+					const wantAll = additionalTranslationLocales.length === 1 && additionalTranslationLocales[0] === 'all';
+					const toInstall = wantAll ? 'all' : additionalTranslationLocales;
+					if (toInstall === 'all' || toInstall.length > 0) {
+						s1.start('Copying additional translations from mota-translations');
+						const { success, copied } = copyAdditionalTranslations(projectCwd, toInstall);
+						if (success && copied.length > 0) {
+							log.success(`Copied locales: ${copied.join(', ')}`);
+						} else if (!success) {
+							log.warn('Failed to clone or copy from mota-translations.');
+						}
+						s1.stop('Additional translations done.');
+					}
+				}
 				// Generate typesafe-i18n output (i18n-types.ts, i18n-util*.ts, i18n-svelte.ts) when translations were installed
 				if (installTranslations) {
+					s1.start('Updating i18n types (typesafe-i18n)');
 					const i18nResult = pmRun(projectCwd, pm, 'i18n:extract');
 					if (i18nResult.status !== 0) {
 						log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
 					}
+					s1.stop('i18n types updated.');
 				}
 			} else {
 				log.error('Failed to clone template.');
@@ -640,6 +735,25 @@ async function main() {
 
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 			s1.stop('Done.');
+		}
+	}
+
+	// When user skipped template merge but chose additional translations, copy and run i18n:extract now
+	if (!templateMerged && installTranslations && additionalTranslationLocales !== null) {
+		const wantAll = additionalTranslationLocales.length === 1 && additionalTranslationLocales[0] === 'all';
+		const toInstall = wantAll ? 'all' : additionalTranslationLocales;
+		if (toInstall === 'all' || toInstall.length > 0) {
+			s1.start('Copying additional translations from mota-translations');
+			const { success, copied } = copyAdditionalTranslations(process.cwd(), toInstall);
+			if (success && copied.length > 0) log.success(`Copied locales: ${copied.join(', ')}`);
+			else if (!success) log.warn('Failed to clone or copy from mota-translations.');
+			s1.stop('Additional translations done.');
+			s1.start('Updating i18n types (typesafe-i18n)');
+			const i18nResult = pmRun(process.cwd(), pm, 'i18n:extract');
+			if (i18nResult.status !== 0) {
+				log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
+			}
+			s1.stop('i18n types updated.');
 		}
 	}
 
