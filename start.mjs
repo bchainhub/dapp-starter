@@ -1024,7 +1024,7 @@ async function main() {
 						if (name) {
 							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year} ${name}\n`);
 						} else {
-							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year}`);
+							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year}\n`);
 						}
 					}
 					const needsCopyrightHolder = /<copyright holders?>/i.test(body);
