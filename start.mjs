@@ -401,6 +401,16 @@ function pmRun(cwd, pm, script, args = [], opts = {}) {
 	return run('npm', ['run', script, ...args], { cwd, stdio });
 }
 
+/** Async pmRun so event loop runs during execution (keeps TTY responsive for next prompts). Returns Promise<{ status }>. */
+async function pmRunAsync(cwd, pm, script, args = [], opts = {}) {
+	const stdio = opts.stdio ?? 'pipe';
+	if (pm === 'deno') return runAsync('deno', ['task', script, ...args], { cwd, stdio });
+	if (pm === 'pnpm') return runAsync('pnpm', ['run', script, ...args], { cwd, stdio });
+	if (pm === 'yarn') return runAsync('yarn', [script, ...args], { cwd, stdio });
+	if (pm === 'bun') return runAsync('bun', ['run', script, ...args], { cwd, stdio });
+	return runAsync('npm', ['run', script, ...args], { cwd, stdio });
+}
+
 function getProjectDir() {
 	const cwd = process.cwd();
 	if (
@@ -724,10 +734,10 @@ async function main() {
 					}
 				}
 				// Generate typesafe-i18n output (i18n-types.ts, i18n-util*.ts, i18n-svelte.ts) from locale files
-				// Use stdio: 'ignore' so child doesn't block on stdin or leave terminal in a state that breaks the next prompt.
+				// Run async with stdio: 'ignore' so event loop stays active and TTY stays responsive for next prompts.
 				if (installTranslations) {
 					s1.start('Generating i18n types from locale files (typesafe-i18n)');
-					const i18nResult = pmRun(projectCwd, pm, 'i18n:extract', [], { stdio: 'ignore' });
+					const i18nResult = await pmRunAsync(projectCwd, pm, 'i18n:extract', [], { stdio: 'ignore' });
 					if (i18nResult.status !== 0) {
 						log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
 					}
@@ -754,7 +764,7 @@ async function main() {
 			s1.stop('Additional translations done.');
 		}
 		s1.start('Generating i18n types from locale files (typesafe-i18n)');
-		const i18nResult = pmRun(process.cwd(), pm, 'i18n:extract', [], { stdio: 'ignore' });
+		const i18nResult = await pmRunAsync(process.cwd(), pm, 'i18n:extract', [], { stdio: 'ignore' });
 		if (i18nResult.status !== 0) {
 			log.warn('typesafe-i18n generation failed; run "npm run i18n:extract" (or pnpm/yarn/bun equivalent) manually.');
 		}
