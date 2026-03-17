@@ -100,7 +100,7 @@ function runAsync(cmd, args = [], opts = {}) {
 	});
 }
 
-const SPINNER_EMOJIS = ['⏳', '📦', '🚀', '✨', '🔧', '📥', '💾', '🌐', '📂', '💻', '🔍', '💼', '🗄️', '💿', '🪝', '⛓️', '🛠️'];
+const SPINNER_EMOJIS = ['⏳', '📦', '🚀', '✨', '🔧', '📥', '💾', '🌐', '📂', '💻', '🔍', '💼', '🗄️', '💿', '🪝'];
 /** Random emoji frames for spinner (replaces rotating bar |/-\). */
 function randomEmojiFrames(n = 60) {
 	return Array.from({ length: n }, () => SPINNER_EMOJIS[Math.floor(Math.random() * SPINNER_EMOJIS.length)]);
@@ -1024,7 +1024,7 @@ async function main() {
 						if (name) {
 							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year} ${name}\n`);
 						} else {
-							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year}`);
+							body = body.replace(wtfplCopyrightLine, `Copyright (C) ${year}\n`);
 						}
 					}
 					const needsCopyrightHolder = /<copyright holders?>/i.test(body);
