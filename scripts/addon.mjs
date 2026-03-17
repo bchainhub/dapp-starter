@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import ejs from 'ejs';
 import JSON5 from 'json5';
 import prompts from 'prompts';
+// @ts-ignore - tiged untyped (declaration not included in package)
 import tiged from 'tiged';
 
 const restArgs = process.argv.slice(2);
@@ -24,9 +25,9 @@ const rest = restArgs.slice(3).filter((arg) => {
 
 if (!repo || !generator || !action) {
 	console.error('Usage: addon <repo> <generator> <action> [options]');
-	console.error('  -c, --cache            use cache dir for repo');
-	console.error('  -d, --dry-run          no writes, script/config/lang skipped');
-	console.error('  -nt, --no-translations  skip _lang processing');
+	console.error('  -c,  --cache           use cache dir for repo');
+	console.error('  -d,  --dry-run         no writes, script/config/lang skipped');
+	console.error('  -nt, --no-translations skip _lang processing');
 	console.error('  -ns, --no-scripts      skip _scripts execution');
 	console.error('  -nc, --no-config       skip _config merge');
 	process.exit(1);

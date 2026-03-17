@@ -416,15 +416,15 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	}
 	s1.stop('Template cloned.');
 
-	s1.start('Copying files (excluding vite.config.ts)');
-	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
+	s1.start('Copying files (excluding vite.config.ts and src/i18n)');
+	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules --exclude=src/i18n .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
 	if (viteBackup !== null) {
 		fs.writeFileSync(vitePath, viteBackup);
 	}
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 	s1.stop('Done.');
 
-	log.success('Project updated from template. vite.config.ts was preserved.');
+	log.success('Project updated from template. vite.config.ts and src/i18n were preserved.');
 	outro('Update complete.');
 }
 
@@ -525,6 +525,12 @@ async function main() {
 			'i18n:watch': 'typesafe-i18n'
 		});
 		s1.stop('typesafe-i18n installed.');
+		s1.start('Initializing i18n types (typesafe-i18n)');
+		const i18nInitResult = pmRun(process.cwd(), pm, 'i18n:extract');
+		if (i18nInitResult.status !== 0) {
+			log.warn('typesafe-i18n generation failed; run i18n:extract (or pnpm/yarn/bun equivalent) manually.');
+		}
+		s1.stop('i18n types initialized.');
 	}
 
 	log.info('Agent skills: https://skills.sh/');
