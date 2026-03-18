@@ -131,9 +131,7 @@ function objectToTs(obj, indent = 0, indentStr = null, alignClosingWithKeys = fa
 		}
 		const closingPad =
 			indentStr != null
-				? (indent === 0
-					? (alignClosingWithKeys ? indentStr : indentStr.slice(0, -1))
-					: indentStr + '\t'.repeat(indent - 1))
+				? (indent === 0 ? indentStr.slice(0, -1) : indentStr + '\t'.repeat(indent - 1))
 				: pad;
 		lines.push(`${closingPad}}`);
 		return lines.join('\n');
@@ -449,18 +447,19 @@ function parseTsObjectToPlain(map) {
 	return out;
 }
 
-/** Serialize parsed map (key -> __rawObject | __expr) back to TS object string. Uses tabs for i18n output. */
-function mapToTsRaw(map) {
+/** Serialize parsed map (key -> __rawObject | __expr) back to TS object string. keyIndent: prefix for each key (root = '\\t', first nested = '\\t\\t'). */
+function mapToTsRaw(map, keyIndent = I18N_INDENT) {
 	const lines = [];
 	for (const [key, value] of Object.entries(map)) {
 		const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
 		if (value && value.__rawObject !== undefined) {
-			lines.push(`${I18N_INDENT}${safeKey}: ${value.__rawObject},`);
+			lines.push(`${keyIndent}${safeKey}: ${value.__rawObject},`);
 		} else if (value && value.__expr !== undefined) {
-			lines.push(`${I18N_INDENT}${safeKey}: ${value.__expr},`);
+			lines.push(`${keyIndent}${safeKey}: ${value.__expr},`);
 		}
 	}
-	return '{\n' + lines.join('\n') + '\n}';
+	const closingPad = keyIndent.length > 1 ? keyIndent.slice(0, -1) : '';
+	return '{\n' + lines.join('\n') + '\n' + closingPad + '}';
 }
 
 /** Apply _lang files into src/i18n/<lang>/index.ts. Returns true if any file was written. */
@@ -527,8 +526,8 @@ function applyHiddenLang(actionDir, locals) {
 		}
 
 		const rootMap = parseTopLevelTsObject(rootBlock.raw);
-		// First level inside a root key (e.g. modules, content) uses 2 tabs to match existing i18n files.
-		const i18nBaseIndent = '\t\t';
+		// Depth 1 = root key (modules): first level uses 2 tabs. Depth 2 = modules.support: first level uses 3 tabs, etc.
+		const i18nIndentForDepth = (depth) => '\t'.repeat(1 + depth);
 		if (pathParts.length === 1) {
 			const key = pathParts[0];
 			const current = rootMap[key]?.__rawObject
@@ -536,7 +535,7 @@ function applyHiddenLang(actionDir, locals) {
 				: {};
 			let merged = deepMerge(isPlainObject(current) ? current : {}, parsed);
 			merged = removeKeys(merged, $remove);
-			rootMap[key] = { __rawObject: objectToTs(merged, 0, i18nBaseIndent, true) };
+			rootMap[key] = { __rawObject: objectToTs(merged, 0, i18nIndentForDepth(1), true) };
 		} else {
 			const topKey = pathParts[0];
 			const rest = pathParts.slice(1);
@@ -553,11 +552,12 @@ function applyHiddenLang(actionDir, locals) {
 			const lastPlain = parseTsObjectToPlain(parseTopLevelTsObject(lastRaw));
 			let merged = deepMerge(isPlainObject(lastPlain) ? lastPlain : {}, parsed);
 			merged = removeKeys(merged, $remove);
-			inner[lastKey] = { __rawObject: objectToTs(merged, 0, i18nBaseIndent, true) };
+			inner[lastKey] = { __rawObject: objectToTs(merged, 0, i18nIndentForDepth(pathParts.length), true) };
 			for (let i = stack.length - 1; i > 0; i--) {
-				stack[i - 1][rest[i - 1]] = { __rawObject: mapToTsRaw(stack[i]) };
+				const nestedKeyIndent = '\t'.repeat(1 + i);
+				stack[i - 1][rest[i - 1]] = { __rawObject: mapToTsRaw(stack[i], nestedKeyIndent) };
 			}
-			rootMap[topKey] = { __rawObject: mapToTsRaw(topMap) };
+			rootMap[topKey] = { __rawObject: mapToTsRaw(topMap, i18nIndentForDepth(1)) };
 		}
 
 		const newRootRaw = mapToTsRaw(rootMap);
