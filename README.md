@@ -78,7 +78,7 @@ npx addon <repo> <generator> <action> [options]
 Examples:
 
 ```bash
-npx addon bchainhub@mota-support auth install
+npx addon bchainhub@mota-addon-support support install
 npx addon owner/repo auth uninstall
 npx addon owner/repo auth install -c
 npx addon owner/repo auth install -d
@@ -485,7 +485,7 @@ npm install @auth/<%= provider %>
 Use:
 
 ```bash
-npx addon owner/repo auth install --dry-run
+npx addon owner/repo addon action --dry-run
 ```
 
 This runs Hygen generation but skips hidden scripts and hidden config application.
@@ -495,7 +495,7 @@ This runs Hygen generation but skips hidden scripts and hidden config applicatio
 Use:
 
 ```bash
-npx addon owner/repo auth install --cache
+npx addon owner/repo addon action --cache
 ```
 
 This keeps addon sources under `.addon-cache/` so they do not need to be downloaded every time.
