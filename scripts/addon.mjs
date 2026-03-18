@@ -105,11 +105,17 @@ function removeKeys(target, removeSpec) {
 
 const I18N_INDENT = '\t';
 
-function objectToTs(obj, indent = 0) {
-	const pad = I18N_INDENT.repeat(indent);
+/** @param indentStr - When set (e.g. from detectModulesBlockIndent), first level uses it and each deeper level adds one tab so install/uninstall preserves file indent. */
+function objectToTs(obj, indent = 0, indentStr = null) {
+	const unit = indentStr ?? I18N_INDENT;
+	const pad =
+		indentStr != null
+			? indentStr + '\t'.repeat(indent)
+			: unit.repeat(indent);
+	const keyPrefix = indentStr != null ? pad : pad + unit;
 
 	if (Array.isArray(obj)) {
-		return `[${obj.map((x) => objectToTs(x, indent)).join(', ')}]`;
+		return `[${obj.map((x) => objectToTs(x, indent, indentStr)).join(', ')}]`;
 	}
 
 	if (obj && typeof obj === 'object') {
@@ -121,7 +127,7 @@ function objectToTs(obj, indent = 0) {
 		const lines = ['{'];
 		for (const [key, value] of entries) {
 			const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-			lines.push(`${pad}${I18N_INDENT}${safeKey}: ${objectToTs(value, indent + 1)},`);
+			lines.push(`${keyPrefix}${safeKey}: ${objectToTs(value, indent + 1, indentStr)},`);
 		}
 		lines.push(`${pad}}`);
 		return lines.join('\n');
@@ -317,6 +323,12 @@ function findModulesBlock(content) {
 		end: i,
 		raw: content.slice(openBrace, i)
 	};
+}
+
+/** Detect the indent string used for the first level inside the modules block (e.g. "\\t\\t" or "    "). Preserves visual consistency on install/uninstall. */
+function detectModulesBlockIndent(blockRaw) {
+	const m = blockRaw.match(/\n([\t ]+)[A-Za-z_$"']/);
+	return m ? m[1] : '\t';
 }
 
 function parseTopLevelTsObject(tsObjectText) {
@@ -599,7 +611,8 @@ function applyHiddenConfig(actionDir, locals) {
 			current = removeKeys(current, removeSpec);
 			current = deepMerge(current, parsed);
 
-			const newBlock = objectToTs(current, 0);
+			const baseIndent = detectModulesBlockIndent(block.raw);
+			const newBlock = objectToTs(current, 0, baseIndent);
 			const next = src.slice(0, block.start) + newBlock + src.slice(block.end);
 
 			fs.writeFileSync(viteFile, next);
