@@ -79,16 +79,16 @@ Examples:
 
 ```bash
 npx addon bchainhub@mota-addon-support support install
-npx addon owner/repo auth uninstall
-npx addon owner/repo auth install -c
-npx addon owner/repo auth install -d
+npx addon owner/repo name-of-addon uninstall
+npx addon owner/repo name-of-addon install -c
+npx addon owner/repo name-of-addon install -d
 ```
 
 **Versioning:** You can pin a release, branch, or commit by appending `#<ref>` to the repo (the addon uses tiged, which supports git refs). For example, for release `1.2.3` use a tag such as `v1.2.3` or `1.2.3`:
 
 ```bash
-npx addon owner/repo#v1.2.3 auth install
-npx addon owner/repo#1.2.3 auth install
+npx addon owner/repo#v1.2.3 name-of-addon install
+npx addon owner/repo#1.2.3 name-of-addon install
 ```
 
 Use `#branch` for a branch or `#<commit-hash>` for a specific commit.
@@ -485,7 +485,7 @@ npm install @auth/<%= provider %>
 Use:
 
 ```bash
-npx addon owner/repo addon action --dry-run
+npx addon owner/repo name-of-addon action --dry-run
 ```
 
 This runs Hygen generation but skips hidden scripts and hidden config application.
@@ -495,7 +495,7 @@ This runs Hygen generation but skips hidden scripts and hidden config applicatio
 Use:
 
 ```bash
-npx addon owner/repo addon action --cache
+npx addon owner/repo name-of-addon action --cache
 ```
 
 This keeps addon sources under `.addon-cache/` so they do not need to be downloaded every time.
