@@ -431,6 +431,33 @@ function findI18nRootObject(content) {
 	return { start, end: i, raw: content.slice(start, i) };
 }
 
+/** Parse a TS/JS string literal (double- or single-quoted) from expr; return unwrapped string or null if not a string literal. */
+function parseStringLiteralFromExpr(expr) {
+	if (typeof expr !== 'string') return null;
+	const trimmed = expr.trim();
+	const q = trimmed[0];
+	if (q !== '"' && q !== "'") return null;
+	if (trimmed.length < 2 || trimmed[trimmed.length - 1] !== q) return null;
+	if (q === '"') {
+		try {
+			return JSON.parse(trimmed);
+		} catch {
+			return null;
+		}
+	}
+	// Single-quoted: unescape and return inner (TS allows single quotes)
+	let inner = '';
+	for (let i = 1; i < trimmed.length - 1; i++) {
+		if (trimmed[i] === '\\') {
+			i++;
+			inner += { "'": "'", n: '\n', r: '\r', t: '\t', '\\': '\\' }[trimmed[i]] ?? trimmed[i];
+		} else {
+			inner += trimmed[i];
+		}
+	}
+	return inner;
+}
+
 /** Convert parsed TS object map (key -> __rawObject | __expr) to plain nested object for merging. */
 function parseTsObjectToPlain(map) {
 	const out = {};
@@ -439,7 +466,8 @@ function parseTsObjectToPlain(map) {
 			const inner = parseTopLevelTsObject(value.__rawObject);
 			out[key] = parseTsObjectToPlain(inner);
 		} else if (value && value.__expr !== undefined) {
-			out[key] = value.__expr;
+			const unwrapped = parseStringLiteralFromExpr(value.__expr);
+			out[key] = unwrapped !== null ? unwrapped : value.__expr;
 		} else {
 			out[key] = value;
 		}
