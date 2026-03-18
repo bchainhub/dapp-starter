@@ -489,15 +489,19 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 	}
 	s1.stop('Template cloned.');
 
-	s1.start('Copying files (excluding vite.config.ts and src/i18n)');
-	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules --exclude=src/i18n .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
+	s1.start('Copying files (excluding vite.config.ts, src/i18n, src/routes/[[lang]]/+page.svelte, static, src/css, src/data)');
+	const tarExcludes = [
+		'.git', 'node_modules', 'src/i18n', 'static', 'src/css', 'src/data',
+		'src/routes/[[lang]]/+page.svelte'
+	].map((e) => `--exclude='${e}'`);
+	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - ${tarExcludes.join(' ')} .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
 	if (viteBackup !== null) {
 		fs.writeFileSync(vitePath, viteBackup);
 	}
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 	s1.stop('Done.');
 
-	log.success('Project updated from template. vite.config.ts and src/i18n were preserved.');
+	log.success('Project updated from template. vite.config.ts, src/i18n, src/routes/[[lang]]/+page.svelte, static, src/css, and src/data were preserved.');
 	outro('Update complete.');
 }
 
