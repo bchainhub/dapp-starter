@@ -129,7 +129,11 @@ function objectToTs(obj, indent = 0, indentStr = null) {
 			const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
 			lines.push(`${keyPrefix}${safeKey}: ${objectToTs(value, indent + 1, indentStr)},`);
 		}
-		lines.push(`${pad}}`);
+		const closingPad =
+			indentStr != null
+				? (indent === 0 ? indentStr.slice(0, -1) : indentStr + '\t'.repeat(indent - 1))
+				: pad;
+		lines.push(`${closingPad}}`);
 		return lines.join('\n');
 	}
 
