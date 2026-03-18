@@ -105,8 +105,8 @@ function removeKeys(target, removeSpec) {
 
 const I18N_INDENT = '\t';
 
-/** @param indentStr - When set (e.g. from detectModulesBlockIndent), first level uses it and each deeper level adds one tab so install/uninstall preserves file indent. */
-function objectToTs(obj, indent = 0, indentStr = null) {
+/** @param indentStr - When set, first level uses it and each deeper level adds one tab. @param alignClosingWithKeys - When true and indentStr set, closing "}" aligns with keys (for i18n); otherwise one tab less (for vite config). */
+function objectToTs(obj, indent = 0, indentStr = null, alignClosingWithKeys = false) {
 	const unit = indentStr ?? I18N_INDENT;
 	const pad =
 		indentStr != null
@@ -115,7 +115,7 @@ function objectToTs(obj, indent = 0, indentStr = null) {
 	const keyPrefix = indentStr != null ? pad : pad + unit;
 
 	if (Array.isArray(obj)) {
-		return `[${obj.map((x) => objectToTs(x, indent, indentStr)).join(', ')}]`;
+		return `[${obj.map((x) => objectToTs(x, indent, indentStr, alignClosingWithKeys)).join(', ')}]`;
 	}
 
 	if (obj && typeof obj === 'object') {
@@ -127,11 +127,13 @@ function objectToTs(obj, indent = 0, indentStr = null) {
 		const lines = ['{'];
 		for (const [key, value] of entries) {
 			const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-			lines.push(`${keyPrefix}${safeKey}: ${objectToTs(value, indent + 1, indentStr)},`);
+			lines.push(`${keyPrefix}${safeKey}: ${objectToTs(value, indent + 1, indentStr, alignClosingWithKeys)},`);
 		}
 		const closingPad =
 			indentStr != null
-				? (indent === 0 ? indentStr.slice(0, -1) : indentStr + '\t'.repeat(indent - 1))
+				? (indent === 0
+					? (alignClosingWithKeys ? indentStr : indentStr.slice(0, -1))
+					: indentStr + '\t'.repeat(indent - 1))
 				: pad;
 		lines.push(`${closingPad}}`);
 		return lines.join('\n');
@@ -525,6 +527,8 @@ function applyHiddenLang(actionDir, locals) {
 		}
 
 		const rootMap = parseTopLevelTsObject(rootBlock.raw);
+		// First level inside a root key (e.g. modules, content) uses 2 tabs to match existing i18n files.
+		const i18nBaseIndent = '\t\t';
 		if (pathParts.length === 1) {
 			const key = pathParts[0];
 			const current = rootMap[key]?.__rawObject
@@ -532,7 +536,7 @@ function applyHiddenLang(actionDir, locals) {
 				: {};
 			let merged = deepMerge(isPlainObject(current) ? current : {}, parsed);
 			merged = removeKeys(merged, $remove);
-			rootMap[key] = { __rawObject: objectToTs(merged, 0) };
+			rootMap[key] = { __rawObject: objectToTs(merged, 0, i18nBaseIndent, true) };
 		} else {
 			const topKey = pathParts[0];
 			const rest = pathParts.slice(1);
@@ -549,7 +553,7 @@ function applyHiddenLang(actionDir, locals) {
 			const lastPlain = parseTsObjectToPlain(parseTopLevelTsObject(lastRaw));
 			let merged = deepMerge(isPlainObject(lastPlain) ? lastPlain : {}, parsed);
 			merged = removeKeys(merged, $remove);
-			inner[lastKey] = { __rawObject: objectToTs(merged, 0) };
+			inner[lastKey] = { __rawObject: objectToTs(merged, 0, i18nBaseIndent, true) };
 			for (let i = stack.length - 1; i > 0; i--) {
 				stack[i - 1][rest[i - 1]] = { __rawObject: mapToTsRaw(stack[i]) };
 			}
