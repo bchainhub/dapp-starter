@@ -500,6 +500,11 @@ npx addon owner/repo name-of-addon action --cache
 
 This keeps addon sources under `.addon-cache/` so they do not need to be downloaded every time.
 
+## Resources
+
+- [📦 MOTA addons search](https://github.com/topics/mota-addon)
+- [📖 MOTA skills search](https://github.com/topics/mota-skill)
+
 ## License
 
 This starter is licensed under the [CORE License](https://github.com/bchainhub/core-license).
