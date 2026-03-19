@@ -121,14 +121,15 @@ function objectToTs(obj, indent = 0, indentStr = null, alignClosingWithKeys = fa
 	if (obj && typeof obj === 'object') {
 		if (obj.__expr !== undefined) return obj.__expr;
 
-		const entries = Object.entries(obj);
-		if (!entries.length) return '{}';
+		const entryList = Object.entries(obj);
+		if (!entryList.length) return '{}';
 
 		const lines = ['{'];
-		for (const [key, value] of entries) {
+		entryList.forEach(([key, value], idx) => {
 			const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-			lines.push(`${keyPrefix}${safeKey}: ${objectToTs(value, indent + 1, indentStr, alignClosingWithKeys)},`);
-		}
+			const comma = idx < entryList.length - 1 ? ',' : '';
+			lines.push(`${keyPrefix}${safeKey}: ${objectToTs(value, indent + 1, indentStr, alignClosingWithKeys)}${comma}`);
+		});
 		const closingPad =
 			indentStr != null
 				? (indent === 0 ? indentStr.slice(0, -1) : indentStr + '\t'.repeat(indent - 1))
@@ -335,6 +336,47 @@ function detectModulesBlockIndent(blockRaw) {
 	return m ? m[1] : '\t';
 }
 
+/** Return index after the end of one value (string/array/object/primitive) in inner starting at start; respects strings and balanced [] {}. */
+function consumeOneValue(inner, start) {
+	let i = start;
+	let depth = 0;
+	let inString = null;
+	while (i < inner.length) {
+		const ch = inner[i];
+		if (inString) {
+			if (ch === '\\') {
+				i += 2;
+				continue;
+			}
+			if (ch === inString) {
+				inString = null;
+				i++;
+				continue;
+			}
+			i++;
+			continue;
+		}
+		if (ch === '"' || ch === "'" || ch === '`') {
+			inString = ch;
+			i++;
+			continue;
+		}
+		if (ch === '[' || ch === '{') {
+			depth++;
+			i++;
+			continue;
+		}
+		if (ch === ']' || ch === '}') {
+			depth--;
+			i++;
+			continue;
+		}
+		if ((ch === ',' || ch === '}') && depth === 0) return i;
+		i++;
+	}
+	return i;
+}
+
 function parseTopLevelTsObject(tsObjectText) {
 	const inner = tsObjectText.trim().replace(/^\{/, '').replace(/\}$/, '');
 	if (!inner.trim()) return {};
@@ -358,26 +400,43 @@ function parseTopLevelTsObject(tsObjectText) {
 
 		while (i < inner.length && /\s/.test(inner[i])) i++;
 
-		if (inner[i] !== '{') {
-			let start = i;
-			while (i < inner.length && inner[i] !== ',') i++;
-			const rawValue = inner.slice(start, i).trim();
-			result[key] = { __expr: rawValue };
+		if (inner[i] === '{') {
+			let depth = 1;
+			const start = i;
+			i++;
+			let inStr = null;
+			while (i < inner.length && depth > 0) {
+				const c = inner[i];
+				if (inStr) {
+					if (c === '\\') {
+						i += 2;
+						continue;
+					}
+					if (c === inStr) {
+						inStr = null;
+						i++;
+						continue;
+					}
+					i++;
+					continue;
+				}
+				if (c === '"' || c === "'" || c === '`') {
+					inStr = c;
+					i++;
+					continue;
+				}
+				if (c === '{') depth++;
+				else if (c === '}') depth--;
+				i++;
+			}
+			result[key] = { __rawObject: inner.slice(start, i) };
 			continue;
 		}
 
-		let depth = 1;
-		let start = i;
-		i++;
-
-		while (i < inner.length && depth > 0) {
-			if (inner[i] === '{') depth++;
-			else if (inner[i] === '}') depth--;
-			i++;
-		}
-
-		const rawObj = inner.slice(start, i);
-		result[key] = { __rawObject: rawObj };
+		const start = i;
+		i = consumeOneValue(inner, i);
+		const rawValue = inner.slice(start, i).trim();
+		result[key] = { __expr: rawValue };
 	}
 
 	return result;
@@ -455,6 +514,14 @@ function parseStringLiteralFromExpr(expr) {
 			inner += trimmed[i];
 		}
 	}
+	// If inner is a double-quoted string (e.g. '"foo"' from JSON), parse it to avoid double-escaping on re-serialize
+	if (inner.length >= 2 && inner[0] === '"' && inner[inner.length - 1] === '"') {
+		try {
+			return JSON.parse(inner);
+		} catch {
+			// fall through to return inner
+		}
+	}
 	return inner;
 }
 
@@ -467,7 +534,17 @@ function parseTsObjectToPlain(map) {
 			out[key] = parseTsObjectToPlain(inner);
 		} else if (value && value.__expr !== undefined) {
 			const unwrapped = parseStringLiteralFromExpr(value.__expr);
-			out[key] = unwrapped !== null ? unwrapped : value.__expr;
+			if (unwrapped !== null) {
+				// Previously corrupted: string literal whose JSON text is array/object source — emit raw, not JSON.stringify again
+				if (typeof unwrapped === 'string' && /^[[{]/.test(unwrapped.trim())) {
+					out[key] = { __expr: unwrapped };
+				} else {
+					out[key] = unwrapped;
+				}
+			} else {
+				// Arrays, objects, $expr(...), numbers as text, etc.: wrap so objectToTs emits raw TS (not JSON.stringify)
+				out[key] = { __expr: value.__expr };
+			}
 		} else {
 			out[key] = value;
 		}
@@ -475,19 +552,20 @@ function parseTsObjectToPlain(map) {
 	return out;
 }
 
-/** Serialize parsed map (key -> __rawObject | __expr) back to TS object string. keyIndent: prefix for each key (root = '\\t', first nested = '\\t\\t'). */
-function mapToTsRaw(map, keyIndent = I18N_INDENT) {
-	const lines = [];
-	for (const [key, value] of Object.entries(map)) {
+/** Serialize parsed map (key -> __rawObject | __expr) back to TS object string. keyIndent: prefix for each key (root = '\\t', first nested = '\\t\\t'). @param doubleBlankBetweenEntries - if true, blank line between top-level keys (i18n root only). */
+function mapToTsRaw(map, keyIndent = I18N_INDENT, doubleBlankBetweenEntries = false) {
+	const entries = Object.entries(map).filter(([, v]) => v && (v.__rawObject !== undefined || v.__expr !== undefined));
+	const lines = entries.map(([key, value], idx) => {
 		const safeKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-		if (value && value.__rawObject !== undefined) {
-			lines.push(`${keyIndent}${safeKey}: ${value.__rawObject},`);
-		} else if (value && value.__expr !== undefined) {
-			lines.push(`${keyIndent}${safeKey}: ${value.__expr},`);
+		const comma = idx < entries.length - 1 ? ',' : '';
+		if (value.__rawObject !== undefined) {
+			return `${keyIndent}${safeKey}: ${value.__rawObject}${comma}`;
 		}
-	}
+		return `${keyIndent}${safeKey}: ${value.__expr}${comma}`;
+	});
 	const closingPad = keyIndent.length > 1 ? keyIndent.slice(0, -1) : '';
-	return '{\n' + lines.join('\n') + '\n' + closingPad + '}';
+	const sep = doubleBlankBetweenEntries ? '\n\n' : '\n';
+	return '{\n' + lines.join(sep) + '\n' + closingPad + '}';
 }
 
 /** Apply _lang files into src/i18n/<lang>/index.ts. Returns true if any file was written. */
@@ -588,7 +666,7 @@ function applyHiddenLang(actionDir, locals) {
 			rootMap[topKey] = { __rawObject: mapToTsRaw(topMap, i18nIndentForDepth(1)) };
 		}
 
-		const newRootRaw = mapToTsRaw(rootMap);
+		const newRootRaw = mapToTsRaw(rootMap, I18N_INDENT, true);
 		const next = src.slice(0, rootBlock.start) + newRootRaw + src.slice(rootBlock.end);
 		fs.writeFileSync(i18nPath, next);
 		applied = true;
