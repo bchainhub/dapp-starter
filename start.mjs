@@ -297,6 +297,11 @@ function composeReadme(opts) {
 		'- `_scripts*` files are rendered/executed automatically and are never copied.',
 		'- `_config*` files are rendered/applied automatically and are never copied.',
 		'- `_config*` currently targets the `modules` block in `vite.config.ts`.',
+		'',
+		'## Resources',
+		'',
+		'- [📦 MOTA addons search](https://github.com/topics/mota-addon)',
+		'- [📖 MOTA skills search](https://github.com/topics/mota-skills)',
 		''
 	);
 
@@ -314,8 +319,8 @@ function composeReadme(opts) {
 
 	if (opts.licenseLabel && opts.licenseLabel !== 'None') {
 		const licenseLine = (opts.licenseLabel === 'Other License' || opts.licenseLabel === 'Commercial Source License (CSL)')
-			? 'CSL or Other License. See \`LICENSE\` in the repo root.'
-			: `${opts.licenseLabel}. See \`LICENSE\` in the repo root.`;
+			? 'CSL or Other License. See [LICENSE](LICENSE) in the repo root.'
+			: `${opts.licenseLabel}. See [LICENSE](LICENSE) in the repo root.`;
 		lines.push('## License', '', licenseLine);
 	}
 
