@@ -301,7 +301,7 @@ function composeReadme(opts) {
 		'## Resources',
 		'',
 		'- [📦 MOTA addons search](https://github.com/topics/mota-addon)',
-		'- [📖 MOTA skills search](https://github.com/topics/mota-skills)',
+		'- [📖 MOTA skills search](https://skills.sh)',
 		''
 	);
 

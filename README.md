@@ -503,7 +503,7 @@ This keeps addon sources under `.addon-cache/` so they do not need to be downloa
 ## Resources
 
 - [📦 MOTA addons search](https://github.com/topics/mota-addon)
-- [📖 MOTA skills search](https://github.com/topics/mota-skills)
+- [📖 MOTA skills search](https://skills.sh)
 
 ## License
 
