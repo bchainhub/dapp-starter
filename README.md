@@ -55,6 +55,24 @@ node start.mjs --update --template https://github.com/your-org/your-template.git
 - git
 - one package manager: npm, pnpm, yarn, or bun
 
+## Development
+
+Sometimes, because of peer dependency incompatibility and the pressure to stay on current package versions (for security and updates), you may need to relax resolution or temporarily pin or downgrade a package so your app installs and runs.
+
+If `npm install` fails on peer conflicts, create a `.npmrc` file in the project **root** with `legacy-peer-deps=true` **before** installing dependencies:
+
+```ini
+legacy-peer-deps=true
+```
+
+Copy-paste to create the file:
+
+```bash
+printf 'legacy-peer-deps=true\n' > .npmrc
+```
+
+Commit `.npmrc` if you want the same behavior in CI and deployment pipelines that run `npm install`.
+
 ## What the installer sets up
 
 The installer:
