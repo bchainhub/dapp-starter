@@ -1161,20 +1161,35 @@ async function main() {
 		initialValue: false
 	});
 	if (!isCancel(addFintag) && addFintag) {
-		let fintagKey = await text({ message: 'Fintag key', placeholder: 'e.g. ican:xcb' });
-		if (!isCancel(fintagKey)) {
-			fintagKey = String(fintagKey).trim().toLowerCase();
-			let fintagValue = await text({ message: 'Fintag value', placeholder: 'e.g. cb…' });
-			if (!isCancel(fintagValue)) {
-				fintagValue = String(fintagValue).trim();
-				if (fintagKey && fintagValue) {
-					const wellKnown = path.join(process.cwd(), 'static', '.well-known');
-					fs.mkdirSync(wellKnown, { recursive: true });
-					const fintagPath = path.join(wellKnown, 'fintag.json');
-					fs.writeFileSync(fintagPath, JSON.stringify({ [fintagKey]: fintagValue }, null, 2) + '\n');
-					log.success('Created .well-known/fintag.json');
-				}
+		const entries = [];
+		for (;;) {
+			const fintagKey = await text({ message: 'Fintag key', placeholder: 'e.g. ican:xcb' });
+			if (isCancel(fintagKey)) break;
+			const keyNorm = String(fintagKey).trim().toLowerCase();
+			if (!keyNorm) {
+				log.warn('Key empty. Skipped.');
+				continue;
 			}
+			const fintagValue = await text({ message: 'Fintag value', placeholder: 'e.g. cb…' });
+			if (isCancel(fintagValue)) break;
+			const valNorm = String(fintagValue).trim();
+			if (!valNorm) {
+				log.warn('Value empty. Skipped.');
+				continue;
+			}
+			entries.push({ key: keyNorm, value: valNorm });
+			const more = await confirm({
+				message: 'Add another Fintag entry?',
+				initialValue: false
+			});
+			if (isCancel(more) || !more) break;
+		}
+		if (entries.length > 0) {
+			const wellKnown = path.join(process.cwd(), 'static', '.well-known');
+			fs.mkdirSync(wellKnown, { recursive: true });
+			const fintagPath = path.join(wellKnown, 'fintag.json');
+			fs.writeFileSync(fintagPath, JSON.stringify(entries, null, 2) + '\n');
+			log.success('Created .well-known/fintag.json');
 		}
 	}
 
