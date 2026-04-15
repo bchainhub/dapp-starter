@@ -59,7 +59,9 @@ node start.mjs --update --template https://github.com/your-org/your-template.git
 
 Sometimes, because of peer dependency incompatibility and the pressure to stay on current package versions (for security and updates), you may need to relax resolution or temporarily pin or downgrade a package so your app installs and runs.
 
-If `npm install` fails on peer conflicts, create a `.npmrc` file in the project **root** with `legacy-peer-deps=true` **before** installing dependencies:
+**ĐApp Starter with npm:** the installer writes `legacy-peer-deps=true` into the project `.npmrc` (and restores it after the MOTA template merge) so installs succeed when a dependency’s peer range lags behind Vite—for example `vite-plugin-pwa` vs Vite 8.
+
+If you still hit peer conflicts, or you are not using this installer, create a `.npmrc` file in the project **root** with `legacy-peer-deps=true` **before** installing dependencies:
 
 ```ini
 legacy-peer-deps=true
