@@ -161,6 +161,40 @@ function addScriptsToPackageJson(pkgPath, scripts) {
 }
 
 /**
+ * Template merge uses tar over the project root, which replaces package.json. Restore deps/scripts/bin
+ * from before extraction: template (post) wins when both define the same package key; starter-only keys stay.
+ */
+function mergePackageJsonAfterTemplate(pre, post) {
+	const merged = { ...post };
+	const depBlocks = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+	for (const key of depBlocks) {
+		const a = pre[key];
+		const b = post[key];
+		if (!a && !b) continue;
+		merged[key] = { ...(a && typeof a === 'object' ? a : {}), ...(b && typeof b === 'object' ? b : {}) };
+	}
+	if (pre.overrides || post.overrides) {
+		merged.overrides = {
+			...(pre.overrides && typeof pre.overrides === 'object' ? pre.overrides : {}),
+			...(post.overrides && typeof post.overrides === 'object' ? post.overrides : {})
+		};
+	}
+	if (pre.bin || post.bin) {
+		merged.bin = {
+			...(pre.bin && typeof pre.bin === 'object' ? pre.bin : {}),
+			...(post.bin && typeof post.bin === 'object' ? post.bin : {})
+		};
+	}
+	if (pre.scripts || post.scripts) {
+		merged.scripts = {
+			...(pre.scripts && typeof pre.scripts === 'object' ? pre.scripts : {}),
+			...(post.scripts && typeof post.scripts === 'object' ? post.scripts : {})
+		};
+	}
+	return merged;
+}
+
+/**
  * Copy translation locales from mota-translations repo (repo i18n/ folder) into project src/i18n.
  * Creates src/i18n if it does not exist.
  * @param {string} projectCwd - Project root
@@ -730,7 +764,12 @@ async function main() {
 
 			if (cloneResult.status === 0) {
 				const projectCwd = process.cwd();
+				const pkgPathForMerge = path.join(projectCwd, 'package.json');
+				const pkgBeforeTemplate = JSON.parse(fs.readFileSync(pkgPathForMerge, 'utf8'));
 				run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${projectCwd}"`], { stdio: 'pipe' });
+				const pkgAfterTemplate = JSON.parse(fs.readFileSync(pkgPathForMerge, 'utf8'));
+				const mergedPkg = mergePackageJsonAfterTemplate(pkgBeforeTemplate, pkgAfterTemplate);
+				fs.writeFileSync(pkgPathForMerge, JSON.stringify(mergedPkg, null, 2) + '\n');
 				templateMerged = true;
 				log.success('MOTA template merged.');
 				s1.start('Installing dependencies');
