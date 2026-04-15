@@ -35,6 +35,14 @@ const MOTA_TRANSLATIONS_REPO = 'https://github.com/bchainhub/mota-translations.g
 const STARTER_REPO_RAW = 'https://cdn.jsdelivr.net/gh/bchainhub/dapp-starter';
 const CORE_LICENSE_URL = 'https://cdn.jsdelivr.net/gh/bchainhub/core-license@main/LICENSE';
 
+/** Installed on every project; kept in sync with the initial `pmAdd` / `pmAddDev` calls below. */
+const STARTER_RUNTIME_PACKAGES = [
+	'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
+	'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
+	'lucide-svelte', 'payto-rl', 'tailwindcss', 'txms.js', 'vite-plugin-pwa', 'zod'
+];
+const STARTER_DEV_TOOL_PACKAGES = ['hygen', 'tiged', 'json5', 'ejs', 'prompts'];
+
 /** Names to skip when listing locale subfolders inside mota-translations repo i18n/ folder. */
 const MOTA_TRANSLATIONS_SKIP_NAMES = new Set(['.git', 'README.md', 'LICENSE', '.gitignore', 'node_modules']);
 
@@ -192,6 +200,22 @@ function mergePackageJsonAfterTemplate(pre, post) {
 		};
 	}
 	return merged;
+}
+
+/**
+ * Re-add starter `dependencies` / `devDependencies` if they are missing (e.g. template merge or ncu dropped them).
+ */
+async function ensureStarterPackagesInPackageJson(cwd, pm) {
+	if (!fs.existsSync(path.join(cwd, 'package.json'))) return;
+	const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
+	const have = new Set([
+		...Object.keys(pkg.dependencies || {}),
+		...Object.keys(pkg.devDependencies || {})
+	]);
+	const missingRun = STARTER_RUNTIME_PACKAGES.filter((n) => !have.has(n));
+	const missingDev = STARTER_DEV_TOOL_PACKAGES.filter((n) => !have.has(n));
+	if (missingRun.length > 0) await pmAddAsync(cwd, pm, ...missingRun);
+	if (missingDev.length > 0) await pmAddDevAsync(cwd, pm, ...missingDev);
 }
 
 /**
@@ -574,12 +598,8 @@ async function main() {
 	s1.stop('Ready.');
 
 	s1.start('Installing base packages');
-	await pmAddAsync(process.cwd(), pm,
-		'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
-		'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
-		'lucide-svelte', 'payto-rl', 'tailwindcss', 'txms.js', 'vite-plugin-pwa', 'zod'
-	);
-	await pmAddDevAsync(process.cwd(), pm, 'hygen', 'tiged', 'json5', 'ejs', 'prompts');
+	await pmAddAsync(process.cwd(), pm, ...STARTER_RUNTIME_PACKAGES);
+	await pmAddDevAsync(process.cwd(), pm, ...STARTER_DEV_TOOL_PACKAGES);
 	s1.stop('Base packages and addon tooling installed.');
 
 	fs.mkdirSync(path.join(process.cwd(), 'bin'), { recursive: true });
@@ -770,6 +790,7 @@ async function main() {
 				const pkgAfterTemplate = JSON.parse(fs.readFileSync(pkgPathForMerge, 'utf8'));
 				const mergedPkg = mergePackageJsonAfterTemplate(pkgBeforeTemplate, pkgAfterTemplate);
 				fs.writeFileSync(pkgPathForMerge, JSON.stringify(mergedPkg, null, 2) + '\n');
+				await ensureStarterPackagesInPackageJson(projectCwd, pm);
 				templateMerged = true;
 				log.success('MOTA template merged.');
 				s1.start('Installing dependencies');
@@ -1191,6 +1212,7 @@ async function main() {
 				pmRemove(process.cwd(), pm, 'npm-check-updates');
 			}
 		}
+		await ensureStarterPackagesInPackageJson(process.cwd(), pm);
 		await pmInstallAsync(process.cwd(), pm);
 	}
 	s1.stop('Packages updated.');
