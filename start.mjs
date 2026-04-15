@@ -160,6 +160,11 @@ function ensureLineInFile(filePath, line) {
 	fs.appendFileSync(filePath, (hasNewline ? '' : '\n') + line + '\n');
 }
 
+/** npm 7+ peer resolution; needed e.g. vite-plugin-pwa vs Vite 8 until upstream peers catch up. */
+function ensureNpmLegacyPeerDeps(cwd) {
+	ensureLineInFile(path.join(cwd, '.npmrc'), 'legacy-peer-deps=true');
+}
+
 function addScriptsToPackageJson(pkgPath, scripts) {
 	if (!fs.existsSync(pkgPath)) return;
 	const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -598,8 +603,12 @@ async function main() {
 	// We do not create .npmignore. If you see "npm warn gitignore-fallback", npm is using .gitignore
 	// for pack/publish exclusion; the warning is harmless. Add a .npmignore yourself to control published files.
 	const npmrcPath = path.join(process.cwd(), '.npmrc');
-	if (fs.existsSync(npmrcPath)) fs.unlinkSync(npmrcPath);
 	const pm = detectPm(process.cwd());
+	if (pm === 'npm') {
+		ensureNpmLegacyPeerDeps(process.cwd());
+	} else if (fs.existsSync(npmrcPath)) {
+		fs.unlinkSync(npmrcPath);
+	}
 	log.step(`Package manager: ${pm}`);
 	s1.stop('Ready.');
 
@@ -789,8 +798,6 @@ async function main() {
 		if (doTemplate) {
 			const defaultPage = path.join(process.cwd(), 'src', 'routes', '+page.svelte');
 			if (fs.existsSync(defaultPage)) fs.unlinkSync(defaultPage);
-			const npmrc = path.join(process.cwd(), '.npmrc');
-			if (fs.existsSync(npmrc)) fs.unlinkSync(npmrc);
 
 			const { baseUrl, refFromUrl } = parseTemplateUrl(templateUrl);
 			const tpl = baseUrl.replace(/\.git$/, '') + '.git';
@@ -810,6 +817,7 @@ async function main() {
 				addMissingStarterDependencyEntries(pkgFromTemplate);
 				applyStarterBinToPackageJson(pkgFromTemplate, scriptFiles);
 				fs.writeFileSync(pkgPathForMerge, JSON.stringify(pkgFromTemplate, null, 2) + '\n');
+				if (pm === 'npm') ensureNpmLegacyPeerDeps(projectCwd);
 				templateMerged = true;
 				log.success('MOTA template merged.');
 				s1.start('Installing dependencies');
