@@ -108,7 +108,7 @@ function runAsync(cmd, args = [], opts = {}) {
 	});
 }
 
-const SPINNER_EMOJIS = ['⏳', '📦', '🚀', '✨', '🔧', '📥', '💾', '🌐', '📂', '💻', '🔍', '💼', '💿', '🪝'];
+const SPINNER_EMOJIS = ['⏳', '📦', '🚀', '✨', '🔧', '📥', '💾', '🌐', '📂', '💻', '🔍', '💼', '💿'];
 /** Random emoji frames for spinner (replaces rotating bar |/-\). */
 function randomEmojiFrames(n = 60) {
 	return Array.from({ length: n }, () => SPINNER_EMOJIS[Math.floor(Math.random() * SPINNER_EMOJIS.length)]);
@@ -169,53 +169,48 @@ function addScriptsToPackageJson(pkgPath, scripts) {
 }
 
 /**
- * Template merge uses tar over the project root, which replaces package.json. Restore deps/scripts/bin
- * from before extraction: template (post) wins when both define the same package key; starter-only keys stay.
+ * Template `package.json` is the source of truth. Add only starter packages that are not already listed
+ * in `dependencies` or `devDependencies` (semver `*` until `npm install` resolves).
  */
-function mergePackageJsonAfterTemplate(pre, post) {
-	const merged = { ...post };
-	const depBlocks = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
-	for (const key of depBlocks) {
-		const a = pre[key];
-		const b = post[key];
-		if (!a && !b) continue;
-		merged[key] = { ...(a && typeof a === 'object' ? a : {}), ...(b && typeof b === 'object' ? b : {}) };
+function addMissingStarterDependencyEntries(pkg) {
+	pkg.dependencies = pkg.dependencies && typeof pkg.dependencies === 'object' ? { ...pkg.dependencies } : {};
+	pkg.devDependencies = pkg.devDependencies && typeof pkg.devDependencies === 'object' ? { ...pkg.devDependencies } : {};
+	const have = new Set([
+		...Object.keys(pkg.dependencies),
+		...Object.keys(pkg.devDependencies)
+	]);
+	for (const name of STARTER_RUNTIME_PACKAGES) {
+		if (!have.has(name)) {
+			pkg.dependencies[name] = '*';
+			have.add(name);
+		}
 	}
-	if (pre.overrides || post.overrides) {
-		merged.overrides = {
-			...(pre.overrides && typeof pre.overrides === 'object' ? pre.overrides : {}),
-			...(post.overrides && typeof post.overrides === 'object' ? post.overrides : {})
-		};
+	for (const name of STARTER_DEV_TOOL_PACKAGES) {
+		if (!have.has(name)) {
+			pkg.devDependencies[name] = '*';
+			have.add(name);
+		}
 	}
-	if (pre.bin || post.bin) {
-		merged.bin = {
-			...(pre.bin && typeof pre.bin === 'object' ? pre.bin : {}),
-			...(post.bin && typeof post.bin === 'object' ? post.bin : {})
-		};
-	}
-	if (pre.scripts || post.scripts) {
-		merged.scripts = {
-			...(pre.scripts && typeof pre.scripts === 'object' ? pre.scripts : {}),
-			...(post.scripts && typeof post.scripts === 'object' ? post.scripts : {})
-		};
-	}
-	return merged;
+	return pkg;
 }
 
-/**
- * Re-add starter `dependencies` / `devDependencies` if they are missing (e.g. template merge or ncu dropped them).
- */
-async function ensureStarterPackagesInPackageJson(cwd, pm) {
-	if (!fs.existsSync(path.join(cwd, 'package.json'))) return;
-	const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
-	const have = new Set([
-		...Object.keys(pkg.dependencies || {}),
-		...Object.keys(pkg.devDependencies || {})
-	]);
-	const missingRun = STARTER_RUNTIME_PACKAGES.filter((n) => !have.has(n));
-	const missingDev = STARTER_DEV_TOOL_PACKAGES.filter((n) => !have.has(n));
-	if (missingRun.length > 0) await pmAddAsync(cwd, pm, ...missingRun);
-	if (missingDev.length > 0) await pmAddDevAsync(cwd, pm, ...missingDev);
+/** Ensure `bin` maps exist for scripts copied to `bin/` (e.g. addon) when the template omitted them. */
+function applyStarterBinToPackageJson(pkg, scriptFileNames) {
+	if (!scriptFileNames || scriptFileNames.length === 0) return pkg;
+	pkg.bin = pkg.bin && typeof pkg.bin === 'object' ? { ...pkg.bin } : {};
+	for (const name of scriptFileNames) {
+		const stem = name.replace(/\.[^.]+$/, '') || name;
+		if (!pkg.bin[stem]) pkg.bin[stem] = `./bin/${name}`;
+	}
+	return pkg;
+}
+
+function syncStarterIntoPackageJsonFile(pkgPath, scriptFileNames) {
+	if (!fs.existsSync(pkgPath)) return;
+	const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+	addMissingStarterDependencyEntries(pkg);
+	applyStarterBinToPackageJson(pkg, scriptFileNames);
+	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 }
 
 /**
@@ -428,22 +423,33 @@ function pmInstall(cwd, pm) {
 	return run('npm', ['install'], { cwd });
 }
 
-async function pmAddAsync(cwd, pm, ...pkgs) {
-	if (pkgs.length === 0) return { status: 0 };
-	if (pm === 'deno') return runAsync('deno', ['add', ...pkgs.map((p) => 'npm:' + p)], { cwd, stdio: 'pipe' });
-	if (pm === 'pnpm') return runAsync('pnpm', ['add', ...pkgs], { cwd, stdio: 'pipe' });
-	if (pm === 'yarn') return runAsync('yarn', ['add', ...pkgs], { cwd, stdio: 'pipe' });
-	if (pm === 'bun') return runAsync('bun', ['add', ...pkgs], { cwd, stdio: 'pipe' });
-	return runAsync('npm', ['i', ...pkgs], { cwd, stdio: 'pipe' });
+/**
+ * @param {string} cwd
+ * @param {string} pm
+ * @param {string | string[]} pkgs - package name(s)
+ * @param {{ stdio?: 'pipe' | 'inherit' }} [opts] - use `inherit` for long installs so output isn’t buffered and npm errors are visible
+ */
+async function pmAddAsync(cwd, pm, pkgs, opts = {}) {
+	const list = Array.isArray(pkgs) ? pkgs : [pkgs];
+	if (list.length === 0) return { status: 0 };
+	const stdio = opts.stdio ?? 'pipe';
+	if (pm === 'deno') return runAsync('deno', ['add', ...list.map((p) => 'npm:' + p)], { cwd, stdio });
+	if (pm === 'pnpm') return runAsync('pnpm', ['add', ...list], { cwd, stdio });
+	if (pm === 'yarn') return runAsync('yarn', ['add', ...list], { cwd, stdio });
+	if (pm === 'bun') return runAsync('bun', ['add', ...list], { cwd, stdio });
+	return runAsync('npm', ['install', ...list], { cwd, stdio });
 }
 
-async function pmAddDevAsync(cwd, pm, ...pkgs) {
-	if (pkgs.length === 0) return { status: 0 };
-	if (pm === 'deno') return runAsync('deno', ['add', ...pkgs.map((p) => 'npm:' + p)], { cwd, stdio: 'pipe' });
-	if (pm === 'pnpm') return runAsync('pnpm', ['add', '-D', ...pkgs], { cwd, stdio: 'pipe' });
-	if (pm === 'yarn') return runAsync('yarn', ['add', ...pkgs], { cwd, stdio: 'pipe' });
-	if (pm === 'bun') return runAsync('bun', ['add', '-d', ...pkgs], { cwd, stdio: 'pipe' });
-	return runAsync('npm', ['i', '-D', ...pkgs], { cwd, stdio: 'pipe' });
+/** @param {{ stdio?: 'pipe' | 'inherit' }} [opts] */
+async function pmAddDevAsync(cwd, pm, pkgs, opts = {}) {
+	const list = Array.isArray(pkgs) ? pkgs : [pkgs];
+	if (list.length === 0) return { status: 0 };
+	const stdio = opts.stdio ?? 'pipe';
+	if (pm === 'deno') return runAsync('deno', ['add', ...list.map((p) => 'npm:' + p)], { cwd, stdio });
+	if (pm === 'pnpm') return runAsync('pnpm', ['add', '-D', ...list], { cwd, stdio });
+	if (pm === 'yarn') return runAsync('yarn', ['add', '-D', ...list], { cwd, stdio });
+	if (pm === 'bun') return runAsync('bun', ['add', '-d', ...list], { cwd, stdio });
+	return runAsync('npm', ['install', '-D', ...list], { cwd, stdio });
 }
 
 async function pmInstallAsync(cwd, pm) {
@@ -597,10 +603,20 @@ async function main() {
 	log.step(`Package manager: ${pm}`);
 	s1.stop('Ready.');
 
-	s1.start('Installing base packages');
-	await pmAddAsync(process.cwd(), pm, ...STARTER_RUNTIME_PACKAGES);
-	await pmAddDevAsync(process.cwd(), pm, ...STARTER_DEV_TOOL_PACKAGES);
-	s1.stop('Base packages and addon tooling installed.');
+	// Do not run the clack spinner during `npm install`: it redraws the TTY and can hide/fight the child process.
+	// Use inherited stdio so npm output streams to the terminal (avoids pipe buffer stalls and silent failures).
+	log.step('Installing base packages (showing package manager output)…');
+	const baseRun = await pmAddAsync(process.cwd(), pm, STARTER_RUNTIME_PACKAGES, { stdio: 'inherit' });
+	if (baseRun.status !== 0) {
+		log.error(`Starter runtime packages failed to install (exit ${baseRun.status}).`);
+		process.exit(1);
+	}
+	const baseDevRun = await pmAddDevAsync(process.cwd(), pm, STARTER_DEV_TOOL_PACKAGES, { stdio: 'inherit' });
+	if (baseDevRun.status !== 0) {
+		log.error(`Starter dev tooling failed to install (exit ${baseDevRun.status}).`);
+		process.exit(1);
+	}
+	log.success('Base packages and addon tooling installed.');
 
 	fs.mkdirSync(path.join(process.cwd(), 'bin'), { recursive: true });
 
@@ -656,7 +672,11 @@ async function main() {
 	let additionalTranslationLocales = null;
 	if (installTranslations) {
 		s1.start('Installing typesafe-i18n');
-		await pmAddAsync(process.cwd(), pm, 'typesafe-i18n');
+		const i18nAdd = await pmAddAsync(process.cwd(), pm, 'typesafe-i18n');
+		if (i18nAdd.status !== 0) {
+			log.error(`typesafe-i18n failed to install (exit ${i18nAdd.status}).`);
+			process.exit(1);
+		}
 		addScriptsToPackageJson(pkgPath, {
 			'typesafe-i18n': 'typesafe-i18n',
 			'i18n:extract': 'typesafe-i18n --no-watch',
@@ -785,12 +805,11 @@ async function main() {
 			if (cloneResult.status === 0) {
 				const projectCwd = process.cwd();
 				const pkgPathForMerge = path.join(projectCwd, 'package.json');
-				const pkgBeforeTemplate = JSON.parse(fs.readFileSync(pkgPathForMerge, 'utf8'));
 				run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - --exclude=.git --exclude=node_modules .) | tar -xf - -C "${projectCwd}"`], { stdio: 'pipe' });
-				const pkgAfterTemplate = JSON.parse(fs.readFileSync(pkgPathForMerge, 'utf8'));
-				const mergedPkg = mergePackageJsonAfterTemplate(pkgBeforeTemplate, pkgAfterTemplate);
-				fs.writeFileSync(pkgPathForMerge, JSON.stringify(mergedPkg, null, 2) + '\n');
-				await ensureStarterPackagesInPackageJson(projectCwd, pm);
+				const pkgFromTemplate = JSON.parse(fs.readFileSync(pkgPathForMerge, 'utf8'));
+				addMissingStarterDependencyEntries(pkgFromTemplate);
+				applyStarterBinToPackageJson(pkgFromTemplate, scriptFiles);
+				fs.writeFileSync(pkgPathForMerge, JSON.stringify(pkgFromTemplate, null, 2) + '\n');
 				templateMerged = true;
 				log.success('MOTA template merged.');
 				s1.start('Installing dependencies');
@@ -1204,7 +1223,11 @@ async function main() {
 		const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
 		const ncuPresent = deps && 'npm-check-updates' in deps;
 		if (!ncuPresent && pm !== 'deno') {
-			await pmAddDevAsync(process.cwd(), pm, 'npm-check-updates');
+			const ncuAdd = await pmAddDevAsync(process.cwd(), pm, 'npm-check-updates');
+			if (ncuAdd.status !== 0) {
+				log.error(`Could not add npm-check-updates (exit ${ncuAdd.status}).`);
+				process.exit(1);
+			}
 		}
 		if (pm !== 'deno') {
 			await runNpxAsync(['npm-check-updates', '-u'], { cwd: process.cwd() });
@@ -1212,7 +1235,7 @@ async function main() {
 				pmRemove(process.cwd(), pm, 'npm-check-updates');
 			}
 		}
-		await ensureStarterPackagesInPackageJson(process.cwd(), pm);
+		syncStarterIntoPackageJsonFile(ncuPkgPath, scriptFiles);
 		await pmInstallAsync(process.cwd(), pm);
 	}
 	s1.stop('Packages updated.');
