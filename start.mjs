@@ -39,7 +39,7 @@ const CORE_LICENSE_URL = 'https://cdn.jsdelivr.net/gh/bchainhub/core-license@mai
 const STARTER_RUNTIME_PACKAGES = [
 	'@blockchainhub/blo', '@blockchainhub/ican', '@tailwindcss/vite',
 	'blockchain-wallet-validator', 'device-sherlock', 'exchange-rounding',
-	'lucide-svelte', 'payto-rl', 'tailwindcss', 'txms.js', 'vite-plugin-pwa', 'zod'
+	'@lucide/svelte', 'payto-rl', 'tailwindcss', 'txms.js', 'vite-plugin-pwa', 'zod'
 ];
 const STARTER_DEV_TOOL_PACKAGES = ['hygen', 'tiged', 'json5', 'ejs', 'prompts'];
 
