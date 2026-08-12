@@ -373,6 +373,7 @@ Supported behavior:
 - `$remove` removes keys
 - `$navbarItems.$append` adds navbar entries without replacing existing items
 - `$navbarItems.$remove` removes navbar entries by matching the supplied fields
+- `$authItems.$append` and `$authItems.$remove` compose the logged-in user dropdown
 - `$expr("...")` injects a raw TypeScript expression instead of a quoted string
 
 Example:
@@ -407,6 +408,16 @@ The uninstall action can use:
 {
   $navbarItems: {
     $remove: [{ action: "signout", show: "loggedIn" }]
+  }
+}
+```
+
+Use `$authItems` instead when the entry belongs in the authenticated user dropdown:
+
+```json5
+{
+  $authItems: {
+    $append: [{ label: "common.logout", action: "signout", icon: "log-out" }]
   }
 }
 ```
@@ -458,6 +469,9 @@ Typical flow:
 2. Hygen renders normal templates
 3. `_scripts*` runs automatically
 4. `_config*` is applied automatically
+
+The addon runner collects prompts once and passes every answer to Hygen. Pressing Ctrl+C
+during a prompt exits cleanly with status 130 and does not continue into generation.
 
 ## Example addon
 
