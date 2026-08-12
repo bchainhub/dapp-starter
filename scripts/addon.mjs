@@ -221,7 +221,7 @@ function parseArrayEntries(source) {
 	return entries;
 }
 
-function composeNavbarItems(source, specification) {
+function composeNavbarArray(source, propertyName, specification) {
 	if (!isPlainObject(specification)) return source;
 	const navbarMatch = /\bnavbar\s*:\s*\{/.exec(source);
 	if (!navbarMatch) return source;
@@ -229,9 +229,18 @@ function composeNavbarItems(source, specification) {
 	const navbarClose = findClosingToken(source, navbarOpen, '{', '}');
 	if (navbarClose < 0) return source;
 	const navbarSource = source.slice(navbarOpen, navbarClose);
-	const itemsMatch = /\bitems\s*:\s*\[/.exec(navbarSource);
-	if (!itemsMatch) return source;
-	const arrayOpen = navbarOpen + itemsMatch.index + itemsMatch[0].lastIndexOf('[');
+	const itemsMatch = new RegExp(`\\b${propertyName}\\s*:\\s*\\[`).exec(navbarSource);
+	if (!itemsMatch) {
+		const hasAppend = Array.isArray(specification.$append) && specification.$append.length > 0;
+		if (!hasAppend) return source;
+		const closingIndent = source.slice(source.lastIndexOf('\n', navbarClose) + 1, navbarClose);
+		const propertyIndent = `${closingIndent}\t`;
+		const previous = source.slice(0, navbarClose).search(/\S(?=\s*$)/);
+		const comma = previous > navbarOpen ? ',' : '';
+		const next = source.slice(0, previous + 1) + comma + `\n${propertyIndent}${propertyName}: []` + source.slice(previous + 1);
+		return composeNavbarArray(next, propertyName, specification);
+	}
+	const arrayOpen = source.indexOf('[', navbarOpen + itemsMatch.index);
 	const arrayClose = findClosingToken(source, arrayOpen, '[', ']');
 	if (arrayClose < 0) return source;
 
@@ -245,10 +254,11 @@ function composeNavbarItems(source, specification) {
 		}
 	}
 
-	const closingIndent = source.slice(source.lastIndexOf('\n', arrayClose) + 1, arrayClose);
+	const closingLine = source.slice(source.lastIndexOf('\n', arrayClose) + 1, arrayClose);
+	const closingIndent = closingLine.match(/^\s*/)?.[0] ?? '';
 	const itemIndent = `${closingIndent}\t`;
 	const body = entries.length
-		? `\n${entries.map((entry) => itemIndent + entry.raw).join(',\n')}\n${closingIndent}`
+		? `\n${entries.map((entry) => entry.raw.split('\n').map((line) => itemIndent + line).join('\n')).join(',\n')}\n${closingIndent}`
 		: '';
 	return source.slice(0, arrayOpen + 1) + body + source.slice(arrayClose);
 }
@@ -293,14 +303,19 @@ async function loadPrompts(actionDir) {
 
 	const mod = await import(toFileUrl(promptFile));
 	const exported = mod.default ?? mod;
+	const onCancel = () => {
+		console.log('\n[addon] Cancelled.');
+		process.exit(130);
+	};
+	const runPrompts = (questions) => prompts(questions, { onCancel });
 
 	if (typeof exported === 'function') {
-		const result = await exported({ prompts, cwd, generator, action, repo });
+		const result = await exported({ prompts: runPrompts, cwd, generator, action, repo });
 		return result || {};
 	}
 
 	if (Array.isArray(exported)) {
-		return await prompts(exported);
+		return await runPrompts(exported);
 	}
 
 	return {};
@@ -324,11 +339,19 @@ function runHygen(locals) {
 
 	// Point Hygen at _templates inside the clone (cleaned with tmpDir when !useCache)
 	const hygenTmpls = path.join(tmpDir, TMPLS_DIR);
-	const result = spawnSync('npx', args, {
-		stdio: 'inherit',
-		cwd,
-		env: { ...process.env, HYGEN_TMPLS: hygenTmpls }
-	});
+	const promptFile = path.join(hygenTmpls, generator, action, 'prompt.js');
+	const hiddenPromptFile = `${promptFile}.addon-runner-disabled`;
+	if (fs.existsSync(promptFile)) fs.renameSync(promptFile, hiddenPromptFile);
+	let result;
+	try {
+		result = spawnSync('npx', args, {
+			stdio: 'inherit',
+			cwd,
+			env: { ...process.env, HYGEN_TMPLS: hygenTmpls }
+		});
+	} finally {
+		if (fs.existsSync(hiddenPromptFile)) fs.renameSync(hiddenPromptFile, promptFile);
+	}
 
 	if (result.status !== 0) process.exit(result.status ?? 1);
 }
@@ -794,12 +817,15 @@ function applyHiddenConfig(actionDir, locals) {
 			parsed = replaceExprs(parsed);
 			const navbarItems = parsed.$navbarItems;
 			delete parsed.$navbarItems;
+			const authItems = parsed.$authItems;
+			delete parsed.$authItems;
 
 			const viteFile = path.join(cwd, 'vite.config.ts');
 			if (!fs.existsSync(viteFile)) return;
 
 			const src = fs.readFileSync(viteFile, 'utf8');
-			const composedSrc = composeNavbarItems(src, navbarItems);
+			let composedSrc = composeNavbarArray(src, 'items', navbarItems);
+			composedSrc = composeNavbarArray(composedSrc, 'authItems', authItems);
 			const block = findModulesBlock(composedSrc);
 			if (!block) {
 				console.warn('No modules block found in vite.config.ts');
