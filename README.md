@@ -371,6 +371,8 @@ Supported behavior:
 
 - normal keys are merged into `modules`
 - `$remove` removes keys
+- `$navbarItems.$append` adds navbar entries without replacing existing items
+- `$navbarItems.$remove` removes navbar entries by matching the supplied fields
 - `$expr("...")` injects a raw TypeScript expression instead of a quoted string
 
 Example:
@@ -383,6 +385,28 @@ Example:
   },
   $remove: {
     legacyAuth: true
+  }
+}
+```
+
+Navbar composition is idempotent. An appended item is skipped when an existing item already
+contains all supplied fields. Removal uses the same subset matching, so an addon can remove
+only the item it owns:
+
+```json5
+{
+  $navbarItems: {
+    $append: [{ label: "common.logout", action: "signout", show: "loggedIn" }]
+  }
+}
+```
+
+The uninstall action can use:
+
+```json5
+{
+  $navbarItems: {
+    $remove: [{ action: "signout", show: "loggedIn" }]
   }
 }
 ```

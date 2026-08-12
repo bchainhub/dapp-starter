@@ -166,6 +166,93 @@ function replaceExprs(value) {
 	return value;
 }
 
+function isSubsetMatch(value, match) {
+	if (!isPlainObject(value) || !isPlainObject(match)) return value === match;
+	return Object.entries(match).every(([key, expected]) =>
+		isPlainObject(expected) ? isSubsetMatch(value[key], expected) : value[key] === expected
+	);
+}
+
+function findClosingToken(source, open, opening, closing) {
+	let depth = 1;
+	let quote = null;
+	for (let i = open + 1; i < source.length; i++) {
+		const char = source[i];
+		if (quote) {
+			if (char === '\\') i++;
+			else if (char === quote) quote = null;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
+		if (char === opening) depth++;
+		else if (char === closing && --depth === 0) return i;
+	}
+	return -1;
+}
+
+function parseArrayEntries(source) {
+	const entries = [];
+	let start = 0;
+	let braces = 0;
+	let brackets = 0;
+	let quote = null;
+	for (let i = 0; i <= source.length; i++) {
+		const char = source[i];
+		if (quote) {
+			if (char === '\\') i++;
+			else if (char === quote) quote = null;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
+		if (char === '{') braces++;
+		else if (char === '}') braces--;
+		else if (char === '[') brackets++;
+		else if (char === ']') brackets--;
+		if ((char === ',' && braces === 0 && brackets === 0) || i === source.length) {
+			const raw = source.slice(start, i).trim();
+			if (raw) {
+				let value = null;
+				try { value = JSON5.parse(raw); } catch { /* Preserve TypeScript expressions. */ }
+				entries.push({ raw, value });
+			}
+			start = i + 1;
+		}
+	}
+	return entries;
+}
+
+function composeNavbarItems(source, specification) {
+	if (!isPlainObject(specification)) return source;
+	const navbarMatch = /\bnavbar\s*:\s*\{/.exec(source);
+	if (!navbarMatch) return source;
+	const navbarOpen = source.indexOf('{', navbarMatch.index);
+	const navbarClose = findClosingToken(source, navbarOpen, '{', '}');
+	if (navbarClose < 0) return source;
+	const navbarSource = source.slice(navbarOpen, navbarClose);
+	const itemsMatch = /\bitems\s*:\s*\[/.exec(navbarSource);
+	if (!itemsMatch) return source;
+	const arrayOpen = navbarOpen + itemsMatch.index + itemsMatch[0].lastIndexOf('[');
+	const arrayClose = findClosingToken(source, arrayOpen, '[', ']');
+	if (arrayClose < 0) return source;
+
+	let entries = parseArrayEntries(source.slice(arrayOpen + 1, arrayClose));
+	const remove = Array.isArray(specification.$remove) ? specification.$remove : [];
+	entries = entries.filter((entry) => !remove.some((match) => entry.value && isSubsetMatch(entry.value, match)));
+	const append = Array.isArray(specification.$append) ? specification.$append : [];
+	for (const item of append) {
+		if (!entries.some((entry) => entry.value && isSubsetMatch(entry.value, item))) {
+			entries.push({ raw: objectToTs(replaceExprs(item)), value: item });
+		}
+	}
+
+	const closingIndent = source.slice(source.lastIndexOf('\n', arrayClose) + 1, arrayClose);
+	const itemIndent = `${closingIndent}\t`;
+	const body = entries.length
+		? `\n${entries.map((entry) => itemIndent + entry.raw).join(',\n')}\n${closingIndent}`
+		: '';
+	return source.slice(0, arrayOpen + 1) + body + source.slice(arrayClose);
+}
+
 async function fetchAddon() {
 	if (useCache && fs.existsSync(tmpDir)) return;
 
@@ -705,12 +792,15 @@ function applyHiddenConfig(actionDir, locals) {
 
 			let parsed = JSON5.parse(text);
 			parsed = replaceExprs(parsed);
+			const navbarItems = parsed.$navbarItems;
+			delete parsed.$navbarItems;
 
 			const viteFile = path.join(cwd, 'vite.config.ts');
 			if (!fs.existsSync(viteFile)) return;
 
 			const src = fs.readFileSync(viteFile, 'utf8');
-			const block = findModulesBlock(src);
+			const composedSrc = composeNavbarItems(src, navbarItems);
+			const block = findModulesBlock(composedSrc);
 			if (!block) {
 				console.warn('No modules block found in vite.config.ts');
 				return;
@@ -727,7 +817,7 @@ function applyHiddenConfig(actionDir, locals) {
 
 			const baseIndent = detectModulesBlockIndent(block.raw);
 			const newBlock = objectToTs(current, 0, baseIndent);
-			const next = src.slice(0, block.start) + newBlock + src.slice(block.end);
+			const next = composedSrc.slice(0, block.start) + newBlock + composedSrc.slice(block.end);
 
 			fs.writeFileSync(viteFile, next);
 			return;
