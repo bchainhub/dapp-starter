@@ -340,7 +340,9 @@ function runHygen(locals) {
 	// Point Hygen at _templates inside the clone (cleaned with tmpDir when !useCache)
 	const hygenTmpls = path.join(tmpDir, TMPLS_DIR);
 	const promptFile = path.join(hygenTmpls, generator, action, 'prompt.js');
-	const hiddenPromptFile = `${promptFile}.addon-runner-disabled`;
+	// The add-on runner has already collected prompt values. Move the prompt
+	// outside HYGEN_TMPLS so Hygen cannot execute or render the renamed file.
+	const hiddenPromptFile = path.join(tmpDir, `.addon-runner-prompt-${process.pid}-${Date.now()}.js`);
 	if (fs.existsSync(promptFile)) fs.renameSync(promptFile, hiddenPromptFile);
 	let result;
 	try {
