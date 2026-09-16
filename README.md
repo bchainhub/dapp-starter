@@ -85,7 +85,16 @@ The installer:
 4. writes `bin/addon.mjs`
 5. maps the command name `addon` in `package.json`
 6. composes a project README
-7. optionally adds translations, skills, template merge, license, and first commit
+7. optionally adds translations, skills, template merge, blockchain interaction tools, license, and first commit
+
+Before choosing a license, the installer asks **Install Blockchain interaction toolset**:
+
+- **None** (default) — skip installation.
+- **Connect.js (Connect Protocol)** — install `connect-protocol`.
+- **CoreBC** — install `corebc`.
+- **Other** — enter an npm package name, including scoped names such as `@scope/package-name`.
+
+The selected package is installed as a runtime dependency using the project's package manager.
 
 ## Addon CLI
 

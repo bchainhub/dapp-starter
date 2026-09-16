@@ -6,3 +6,4 @@ node_modules
 .LSOverride
 Icon
 ._*
+package-lock.json
