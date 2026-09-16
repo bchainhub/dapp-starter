@@ -1006,6 +1006,47 @@ async function main() {
 		}
 	}
 
+	const blockchainChoice = await select({
+		message: 'Install Blockchain interaction toolset',
+		options: [
+			{ value: 'none', label: 'None' },
+			{ value: 'connect-protocol', label: 'Connect.js (Connect Protocol)' },
+			{ value: 'corebc', label: 'CoreBC' },
+			{ value: 'other', label: 'Other' }
+		],
+		initialValue: 'none'
+	});
+	if (isCancel(blockchainChoice)) {
+		cancel('Cancelled.');
+		process.exit(0);
+	}
+	let blockchainPackage = blockchainChoice === 'none' ? null : blockchainChoice;
+	if (blockchainChoice === 'other') {
+		const packageInput = await text({
+			message: 'NPM package name to install',
+			placeholder: 'package-name or @scope/package-name',
+			validate: (value) => {
+				if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test((value || '').trim())) {
+					return 'Enter a valid npm package name (e.g. package-name or @scope/package-name).';
+				}
+			}
+		});
+		if (isCancel(packageInput)) {
+			cancel('Cancelled.');
+			process.exit(0);
+		}
+		blockchainPackage = packageInput.trim();
+	}
+	if (blockchainPackage) {
+		log.step(`Installing ${blockchainPackage}`);
+		const blockchainAdd = await pmAddAsync(process.cwd(), pm, blockchainPackage, { stdio: 'inherit' });
+		if (blockchainAdd.status !== 0) {
+			log.error(`${blockchainPackage} failed to install (exit ${blockchainAdd.status}).`);
+			process.exit(1);
+		}
+		log.success(`${blockchainPackage} installed.`);
+	}
+
 	const licChoice = await select({
 		message: 'Choose a license',
 		options: [
