@@ -57,6 +57,8 @@ node start.mjs --update --template https://github.com/your-org/your-template.git
 
 ## Development
 
+We use `legacy-peer-deps=true` in the project `.npmrc` to make npm less strict when resolving peer dependencies. This allows installation to continue when a package declares an older or narrower peer-dependency range even though the newer installed version is still compatible in practice. This is particularly useful for keeping dependencies up to date without being blocked by packages whose peer-dependency declarations have not yet caught up with the latest ecosystem releases.
+
 Sometimes, because of peer dependency incompatibility and the pressure to stay on current package versions (for security and updates), you may need to relax resolution or temporarily pin or downgrade a package so your app installs and runs.
 
 **ĐApp Starter with npm:** the installer writes `legacy-peer-deps=true` into the project `.npmrc` (and restores it after the MOTA template merge) so installs succeed when a dependency’s peer range lags behind Vite—for example `vite-plugin-pwa` vs Vite 8.
@@ -74,6 +76,14 @@ printf 'legacy-peer-deps=true\n' > .npmrc
 ```
 
 Commit `.npmrc` if you want the same behavior in CI and deployment pipelines that run `npm install`.
+
+When deploying to Cloudflare, you may encounter an `adapter-auto` error because `@sveltejs/adapter-auto` detects the Cloudflare environment and expects the corresponding Cloudflare adapter to be available as a peer dependency. If this happens, install the Cloudflare adapter explicitly:
+
+```bash
+npm install -D @sveltejs/adapter-cloudflare
+```
+
+After installing the adapter, rebuild or redeploy the application. The existing `adapter-auto` configuration can then detect and use the Cloudflare adapter during deployment.
 
 ## What the installer sets up
 
