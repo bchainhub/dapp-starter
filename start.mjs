@@ -173,11 +173,36 @@ function addScriptsToPackageJson(pkgPath, scripts) {
 	fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 }
 
+function applyKit3PackageDefaults(pkg) {
+	const kitDependencies = pkg.dependencies?.['@sveltejs/kit'] ? pkg.dependencies : (pkg.devDependencies ??= {});
+	kitDependencies['@sveltejs/kit'] = '^3.0.0';
+	pkg.imports = { '#lib': './src/lib/index.js', '#lib/*': './src/lib/*', ...pkg.imports };
+	// Kit uses the TypeScript JavaScript API, which TypeScript 7 no longer supplies.
+	const dependencies = pkg.dependencies?.typescript ? pkg.dependencies : (pkg.devDependencies ??= {});
+	dependencies.typescript = '~6.0.3';
+	return pkg;
+}
+
+function isSvelteKitProject(dir) {
+	try {
+		const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+		return Boolean(pkg.devDependencies?.['@sveltejs/kit'] || pkg.dependencies?.['@sveltejs/kit']);
+	} catch {
+		return false;
+	}
+}
+
+function isKit3Template(dir) {
+	const config = path.join(dir, 'tsconfig.json');
+	return fs.existsSync(config) && fs.readFileSync(config, 'utf8').includes('$app/tsconfig');
+}
+
 /**
  * Template `package.json` is the source of truth. Add only starter packages that are not already listed
  * in `dependencies` or `devDependencies` (semver `*` until `npm install` resolves).
  */
 function addMissingStarterDependencyEntries(pkg) {
+	applyKit3PackageDefaults(pkg);
 	pkg.dependencies = pkg.dependencies && typeof pkg.dependencies === 'object' ? { ...pkg.dependencies } : {};
 	pkg.devDependencies = pkg.devDependencies && typeof pkg.devDependencies === 'object' ? { ...pkg.devDependencies } : {};
 	const have = new Set([
@@ -493,12 +518,7 @@ async function pmRunAsync(cwd, pm, script, args = [], opts = {}) {
 
 function getProjectDir() {
 	const cwd = process.cwd();
-	if (
-		fs.existsSync(path.join(cwd, 'package.json')) &&
-		(fs.existsSync(path.join(cwd, 'svelte.config.js')) || fs.existsSync(path.join(cwd, 'svelte.config.ts')))
-	) {
-		return '.';
-	}
+	if (isSvelteKitProject(cwd)) return '.';
 
 	const entries = fs.readdirSync(cwd, { withFileTypes: true });
 	let best = null;
@@ -507,11 +527,7 @@ function getProjectDir() {
 	for (const e of entries) {
 		if (!e.isDirectory()) continue;
 		const dir = e.name;
-		const pj = path.join(cwd, dir, 'package.json');
-		const sc = path.join(cwd, dir, 'svelte.config.js');
-		const st = path.join(cwd, dir, 'svelte.config.ts');
-		if (!fs.existsSync(pj)) continue;
-		if (!fs.existsSync(sc) && !fs.existsSync(st)) continue;
+		if (!isSvelteKitProject(path.join(cwd, dir))) continue;
 		const stat = fs.statSync(path.join(cwd, dir));
 		const mtime = stat.mtimeMs || 0;
 		if (mtime > bestTime) {
@@ -520,12 +536,14 @@ function getProjectDir() {
 		}
 	}
 
-	return best || '.';
+	if (!best) throw new Error('Could not locate the created SvelteKit project.');
+	return best;
 }
 
 async function runUpdateMode(tplUrl, tplVersion = null) {
 	intro('Update from template');
 	const cwd = process.cwd();
+	if (!isSvelteKitProject(cwd)) throw new Error('Run --update from a SvelteKit project root.');
 	const vitePath = path.join(cwd, 'vite.config.ts');
 	let viteBackup = null;
 	if (fs.existsSync(vitePath)) {
@@ -562,20 +580,34 @@ async function runUpdateMode(tplUrl, tplVersion = null) {
 		process.exit(1);
 	}
 	s1.stop('Template cloned.');
+	if (isKit3Template(cloneDir)) {
+		const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
+		const kit = pkg.devDependencies?.['@sveltejs/kit'] ?? pkg.dependencies?.['@sveltejs/kit'];
+		const hasLegacyConfig = ['svelte.config.js', 'svelte.config.ts'].some((name) => fs.existsSync(path.join(cwd, name)));
+		if (!/^[~^]?3\./.test(kit) || hasLegacyConfig) {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+			throw new Error('Migrate this project to SvelteKit 3 before updating: https://svelte.dev/docs/kit/migrating-to-sveltekit-3. Update mode preserves your Vite configuration.');
+		}
+	}
 
 	s1.start('Copying files (excluding vite.config.ts, src/i18n, src/routes/[[lang]]/+page.svelte, static, src/css, src/data)');
 	const tarExcludes = [
 		'.git', 'node_modules', 'src/i18n', 'static', 'src/css', 'src/data',
-		'src/routes/[[lang]]/+page.svelte'
+		'src/routes/[[lang]]/+page.svelte',
+		...(fs.existsSync(path.join(cwd, 'src/env.ts')) ? ['src/env.ts'] : [])
 	].map((e) => `--exclude='${e}'`);
 	run('sh', ['-c', `(cd "${cloneDir}" && tar -cf - ${tarExcludes.join(' ')} .) | tar -xf - -C "${cwd}"`], { stdio: 'pipe' });
+	const updatedPackagePath = path.join(cwd, 'package.json');
+	const updatedPackage = JSON.parse(fs.readFileSync(updatedPackagePath, 'utf8'));
+	applyKit3PackageDefaults(updatedPackage);
+	fs.writeFileSync(updatedPackagePath, JSON.stringify(updatedPackage, null, '\t') + '\n');
 	if (viteBackup !== null) {
 		fs.writeFileSync(vitePath, viteBackup);
 	}
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 	s1.stop('Done.');
 
-	log.success('Project updated from template. vite.config.ts, src/i18n, src/routes/[[lang]]/+page.svelte, static, src/css, and src/data were preserved.');
+	log.success('Project updated from template. vite.config.ts, src/i18n, src/routes/[[lang]]/+page.svelte, static, src/css, src/data, and existing src/env.ts were preserved. Run your package manager install to refresh dependencies and generated types.');
 	outro('Update complete.');
 }
 
@@ -589,7 +621,15 @@ async function main() {
 
 	const s1 = spinner({ frames: randomEmojiFrames(), delay: 300 });
 	s1.start('Creating SvelteKit project');
-	const svResult = run('npx', ['sv', 'create', ...passArgs], { stdio: 'inherit' });
+	// Apply compatibility pins before the first install (including Kit's prepare hook).
+	let requestedPm;
+	const createArgs = [];
+	for (let i = 0; i < passArgs.length; i++) {
+		if (passArgs[i] === '--install') requestedPm = passArgs[++i];
+		else if (passArgs[i].startsWith('--install=')) requestedPm = passArgs[i].slice('--install='.length);
+		else if (passArgs[i] !== '--no-install') createArgs.push(passArgs[i]);
+	}
+	const svResult = run('npx', ['sv@latest', 'create', ...createArgs, '--no-install'], { stdio: 'inherit' });
 	s1.stop(svResult.status === 0 ? 'SvelteKit project created.' : 'sv create finished.');
 	if (svResult.status !== 0) {
 		log.error('sv create failed.');
@@ -600,10 +640,14 @@ async function main() {
 	const projectDir = getProjectDir();
 	log.step(`Project directory: ${projectDir}`);
 	process.chdir(projectDir);
+	const scaffoldPackagePath = path.join(process.cwd(), 'package.json');
+	const scaffoldPackage = JSON.parse(fs.readFileSync(scaffoldPackagePath, 'utf8'));
+	applyKit3PackageDefaults(scaffoldPackage);
+	fs.writeFileSync(scaffoldPackagePath, JSON.stringify(scaffoldPackage, null, '\t') + '\n');
 	// We do not create .npmignore. If you see "npm warn gitignore-fallback", npm is using .gitignore
 	// for pack/publish exclusion; the warning is harmless. Add a .npmignore yourself to control published files.
 	const npmrcPath = path.join(process.cwd(), '.npmrc');
-	const pm = detectPm(process.cwd());
+	const pm = requestedPm || detectPm(process.cwd());
 	if (pm === 'npm') {
 		ensureNpmLegacyPeerDeps(process.cwd());
 	} else if (fs.existsSync(npmrcPath)) {

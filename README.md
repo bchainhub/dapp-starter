@@ -49,9 +49,13 @@ node start.mjs --update --template https://github.com/your-org/your-template.git
 - Template is cloned to a temp dir; its contents are copied over your project (excluding `.git` and `node_modules`). Your **`vite.config.ts`** is backed up and restored so it is never replaced.
 - On success you get: *Project updated from template. vite.config.ts was preserved.*
 
+The starter always targets SvelteKit `^3.0.0`, allowing the latest 3.x release on a fresh install. New projects receive `#lib` package import mappings and TypeScript `~6.0.3` (Kit requires its JavaScript API). Projects are detected by their SvelteKit dependency, without requiring the removed `svelte.config.js` file. The Svelte CLI (`sv@latest`) has its own version number, separate from SvelteKit.
+
+Before updating a SvelteKit 2 project, follow the [SvelteKit 3 migration guide](https://svelte.dev/docs/kit/migrating-to-sveltekit-3). Update mode preserves Vite configuration and refuses to apply the new template to an unmigrated project. Existing `src/env.ts` declarations are also preserved. After updating, run your package manager install to refresh the lockfile and generated types.
+
 ## Requirements
 
-- Node.js 18+
+- Node.js 22.17+
 - git
 - one package manager: npm, pnpm, yarn, or bun
 
@@ -309,7 +313,7 @@ They are:
 
 **Important:** This config is **client-side**. Never put secrets or server-only configuration here—it can end up in the client bundle.
 
-For secrets and server config, use the official SvelteKit approach: `$env/static/private`, `$env/dynamic/private`, or Vite’s `import.meta.env` (e.g. `VITE_*` for public env vars only).
+For secrets and server config, use the official SvelteKit approach: `$app/env/private`, with variables declared using `defineEnvVars` in `src/env.ts`. Only mark a variable `public: true` when it is safe to expose to the browser; public variables are imported from `$app/env/public`.
 
 Use `_config.ejs.json5` when you want prompt values interpolated before merge:
 
@@ -384,7 +388,7 @@ Skip translation application with `-nt` or `--no-translations`.
 
 ## Config merge behavior
 
-The hidden config file is merged into the `modules` object in `vite.config.ts`. Remember: this is client-visible config—no secrets or server-only values (use SvelteKit `$env/*/private` or Vite `import.meta.env` instead).
+The hidden config file is merged into the `modules` object in `vite.config.ts`. Remember: this is client-visible config—no secrets or server-only values (declare secrets in `src/env.ts` and import them from `$app/env/private` in server code).
 
 Supported behavior:
 
