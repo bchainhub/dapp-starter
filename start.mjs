@@ -174,9 +174,13 @@ function addScriptsToPackageJson(pkgPath, scripts) {
 }
 
 function applyKit3PackageDefaults(pkg) {
+	const nodeRange = pkg.engines?.node;
+	pkg.engines = { ...pkg.engines, node: nodeRange
+		? nodeRange.split('||').map((range) => range.trim().startsWith('>=22.17.0') ? range.trim() : `>=22.17.0 ${range.trim()}`).join(' || ')
+		: '>=22.17.0' };
 	const kitDependencies = pkg.dependencies?.['@sveltejs/kit'] ? pkg.dependencies : (pkg.devDependencies ??= {});
 	kitDependencies['@sveltejs/kit'] = '^3.0.0';
-	pkg.imports = { '#lib': './src/lib/index.js', '#lib/*': './src/lib/*', ...pkg.imports };
+	pkg.imports = { '#lib': './src/lib/index.js', '#lib/*': './src/lib/*', '#data': './src/data/index.js', '#data/*': './src/data/*', '#components': './src/lib/components/index.js', '#components/*': './src/lib/components/*', '#modules/*': './src/lib/modules/*', ...pkg.imports };
 	// Kit uses the TypeScript JavaScript API, which TypeScript 7 no longer supplies.
 	const dependencies = pkg.dependencies?.typescript ? pkg.dependencies : (pkg.devDependencies ??= {});
 	dependencies.typescript = '~6.0.3';
@@ -317,8 +321,8 @@ function composeReadme(opts) {
 		'## Overview',
 		'',
 		'- SvelteKit + MOTA stack',
-		'- Addon CLI: `npx addon <repo> <generator> <action>`',
-		'- Hidden addon control files supported: `prompt.js`, `_scripts.ejs.sh` / `_scripts.sh`, `_config.ejs.json5` / `_config.json5`'
+		'- Addon CLI: `node bin/addon.mjs <repo> <generator> <action>` (applies by default; --dry-run inspects)',
+		'- Hidden addon control files supported: `prompt.js`, plain `_scripts.sh`, `_config.ejs.json5` / `_config.json5`'
 	];
 
 	if (opts.installTranslations) lines.push('- **i18n** – typesafe-i18n (see [Translations](#translations))');
@@ -348,38 +352,23 @@ function composeReadme(opts) {
 		'',
 		'## Addons',
 		'',
-		'Install an addon:',
+		'Inspect an addon without running its code or modifying this project:',
 		'',
-		'```bash',
-		'npx addon <repo> <generator> <action>',
+		'```sh',
+		'node bin/addon.mjs owner/repo generator install --dry-run',
 		'```',
 		'',
-		'Examples:',
+		'Applying is the default. To apply directly to this project:',
 		'',
-		'```bash',
-		'npx addon bchainhub@mota-addon-support support install',
-		'npx addon owner/repo name-of-addon uninstall',
-		'npx addon owner/repo name-of-addon install --cache',
-		'npx addon owner/repo name-of-addon install --dry-run',
+		'```sh',
+		'node bin/addon.mjs owner/repo generator install --answers \'{"route":"account"}\'',
 		'```',
 		'',
-		'Addon action folders can contain:',
+		'--dry-run performs static inspection only. --apply is an optional explicit alias for the default applying behavior; --commit SHA optionally pins the source. Without --commit, the selected repository ref or HEAD is resolved on each invocation. EJS generation is executable code. Prompts, plain hidden scripts, raw expressions, declared packages and lifecycle scripts require their respective --allow-* flags. Shell EJS interpolation and template shell/setup hooks are rejected. Runner-managed destinations are checked for traversal, symlinks and protected paths before writes.',
 		'',
-		'```text',
-		'<generator>/<action>/',
-		'  prompt.js',
-		'  *.ejs.t',
-		'  _scripts.ejs.sh',
-		'  _scripts.sh',
-		'  _config.ejs.json5',
-		'  _config.json5',
-		'```',
+		"Declare exact npm packages and migration command/argument arrays in the action's addon.json. Migration execution is a separate --run-migrations --migrations-only --migration-target NAME invocation (with optional --commit SHA or --dry-run), with no generation or install stages. DB credentials belong in server secrets, not the target name or client config. Generation does not automatically run migrations or translation tooling; review changes and then run the project's i18n:extract script when needed.",
 		'',
-		'- `prompt.js` collects answers once and those values are reused in templates, scripts, and config.',
-		'- `*.ejs.t` are normal Hygen templates and are copied/generated into the project.',
-		'- `_scripts*` files are rendered/executed automatically and are never copied.',
-		'- `_config*` files are rendered/applied automatically and are never copied.',
-		'- `_config*` currently targets the `modules` block in `vite.config.ts`.',
+		'Code explicitly permitted to run retains host permissions; stage controls are not a sandbox. The resolved commit is reported; --commit optionally pins it, and source caches live outside the project keyed by repository/commit. See the [starter addon guide](https://github.com/bchainhub/dapp-starter#addon-cli) for flags, the manifest schema and older-addon migration steps.',
 		'',
 		'## Resources',
 		'',

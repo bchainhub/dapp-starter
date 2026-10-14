@@ -1,19 +1,26 @@
 {
-  "name": "dapp-starter",
-  "version": "0.1.0",
-  "description": "Dapp project starter with interactive setup",
-  "type": "module",
-  "bin": {
-    "sv-starter": "./start.mjs"
-  },
-  "scripts": {
-    "start": "node start.mjs",
-    "create": "node start.mjs"
-  },
-  "dependencies": {
-    "@clack/prompts": "^1.8.1"
-  },
-  "engines": {
-    "node": ">=22.17.0"
-  }
+	"name": "dapp-starter",
+	"version": "0.1.1",
+	"description": "Dapp project starter with interactive setup",
+	"type": "module",
+	"bin": {
+		"sv-starter": "./start.mjs"
+	},
+	"scripts": {
+		"start": "node start.mjs",
+		"create": "node start.mjs",
+		"test": "node --test tests/*.test.mjs"
+	},
+	"dependencies": {
+		"@clack/prompts": "^1.8.1"
+	},
+	"engines": {
+		"node": ">=22.17.0"
+	},
+	"devDependencies": {
+		"ejs": "^7.0.1",
+		"hygen": "^6.2.11",
+		"json5": "^2.2.3",
+		"prompts": "^2.4.2"
+	}
 }

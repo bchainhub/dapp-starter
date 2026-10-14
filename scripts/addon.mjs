@@ -3,64 +3,316 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import ejs from 'ejs';
-import JSON5 from 'json5';
-import prompts from 'prompts';
-// @ts-ignore - tiged untyped (declaration not included in package)
-import tiged from 'tiged';
+import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
-const restArgs = process.argv.slice(2);
-const repo = restArgs[0];
-const generator = restArgs[1];
-const action = restArgs[2];
-let noTranslations = false;
-let noScripts = false;
-let noConfig = false;
-const rest = restArgs.slice(3).filter((arg) => {
-	if (arg === '--no-translations' || arg === '-nt') { noTranslations = true; return false; }
-	if (arg === '--no-scripts' || arg === '-ns') { noScripts = true; return false; }
-	if (arg === '--no-config' || arg === '-nc') { noConfig = true; return false; }
-	return true;
-});
+const argv = process.argv.slice(2);
+const [repo, generator, action] = argv;
+const options = {};
+const booleanFlags = new Set(['apply', 'dry-run', 'cache', 'no-translations', 'no-scripts', 'no-config', 'allow-prompts', 'allow-scripts', 'allow-expressions', 'allow-packages', 'allow-package-scripts', 'run-migrations', 'migrations-only', 'overwrite']);
+const valueFlags = new Set(['commit', 'answers', 'migration-target']);
+const aliases = { '-c': '--cache', '-d': '--dry-run', '-nt': '--no-translations', '-ns': '--no-scripts', '-nc': '--no-config' };
+function usage() {
+	console.log(`Usage: node bin/addon.mjs <owner/repo#ref|https-url|local-git-path> <generator> <action> [options]
+Default: apply directly to this project. Use --dry-run for static inspection.
+  --apply                 explicitly apply (optional; this is the default)
+  --commit SHA            optionally pin an exact full commit SHA
+  -d, --dry-run            static inspection (cannot be combined with --apply)
+  -c, --cache              cache verified source objects by repository and commit outside the project
+  --answers JSON          non-secret prompt values as a JSON object
+  --allow-prompts          allow prompt.js execution (otherwise use --answers)
+  --allow-scripts          allow reviewed plain _scripts.sh (host permissions)
+  --allow-expressions      allow raw $expr config values
+  --allow-packages         install exact packages declared in addon.json, lifecycle scripts disabled
+  --allow-package-scripts  also allow dependency lifecycle scripts
+  --run-migrations --migrations-only --migration-target NAME
+                          run only declared migrations against an explicit named target
+  --overwrite             allow generated templates to replace existing files
+  -ns, --no-scripts        skip hidden scripts
+  -nc, --no-config         skip config merge
+  -nt, --no-translations   skip translation merge`);
+}
+let tmpDir;
+let downloadDir;
+let resolvedCommit;
+let sourceUrl;
+const cwd = fs.realpathSync(process.cwd());
+const projectRequire = createRequire(path.join(cwd, 'package.json'));
+const pendingWrites = new Map();
+const generatedDestinations = new Set();
+let ejs;
+let JSON5;
+let prompts;
+let noTranslations;
+let noScripts;
+let noConfig;
+const dryRun = argv.includes('--dry-run') || argv.includes('-d');
+const unsafeKeys = new Set(['__proto__', 'prototype', 'constructor', '__expr', '__rawObject']);
 
-if (!repo || !generator || !action) {
-	console.error('Usage: addon <repo> <generator> <action> [options]');
-	console.error('  -c,  --cache           use cache dir for repo');
-	console.error('  -d,  --dry-run         no writes, script/config/lang skipped');
-	console.error('  -nt, --no-translations skip _lang processing');
-	console.error('  -ns, --no-scripts      skip _scripts execution');
-	console.error('  -nc, --no-config       skip _config merge');
-	process.exit(1);
+function parseOptions() {
+	for (let i = 3; i < argv.length; i++) {
+		const flag = aliases[argv[i]] ?? argv[i];
+		const key = flag.slice(2);
+		if (!flag.startsWith('--') || (!booleanFlags.has(key) && !valueFlags.has(key))) throw new Error(`Unknown option: ${flag}`);
+		if (options[key] !== undefined) throw new Error(`Repeated option: ${flag}`);
+		if (valueFlags.has(key)) {
+			if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error(`Missing value for ${flag}`);
+			options[key] = argv[++i];
+		} else options[key] = true;
+	}
+	for (const [label, value] of [['generator', generator], ['action', action]]) {
+		if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value ?? '')) throw new Error(`Invalid ${label}: use a single letters/digits/hyphen/underscore segment`);
+	}
+	if (options.apply && options['dry-run']) throw new Error('--apply and --dry-run are mutually exclusive');
+	if (options.commit && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(options.commit)) throw new Error('--commit requires a full commit SHA');
+	if (options.commit) options.commit = options.commit.toLowerCase();
+	if (options['allow-package-scripts'] && !options['allow-packages']) throw new Error('--allow-package-scripts requires --allow-packages');
+	if (options['migrations-only'] !== options['run-migrations']) throw new Error('Migrations require both --migrations-only and --run-migrations');
+	if (options['run-migrations'] && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(options['migration-target'] ?? '')) throw new Error('Migrations require an explicit --migration-target NAME (not a credential URL)');
+	if (options['migration-target'] && !options['run-migrations']) throw new Error('--migration-target requires --run-migrations');
+	if (options['migrations-only'] && ['allow-prompts', 'allow-scripts', 'allow-packages', 'allow-package-scripts', 'allow-expressions', 'overwrite', 'answers'].some((flag) => options[flag])) throw new Error('Migration-only execution cannot include generation, prompts, scripts or packages');
+	noTranslations = !!options['no-translations'];
+	noScripts = !!options['no-scripts'];
+	noConfig = !!options['no-config'];
 }
 
-const cwd = process.cwd();
-const useCache = rest.includes('--cache') || rest.includes('-c');
-const dryRun = rest.includes('--dry-run') || rest.includes('-d');
-
-const cacheDir = path.join(cwd, '.addon-cache', repo.replace(/[/:@]/g, '_'));
-const tmpDir = useCache ? cacheDir : fs.mkdtempSync(path.join(os.tmpdir(), 'addon-'));
-
-/** Normalize repo to HTTPS URL so clone works without SSH keys (avoids "Permission denied (publickey)"). */
-function repoToHttps(repoSpec) {
-	const s = String(repoSpec).trim();
-	// Already HTTPS
-	if (s.startsWith('https://')) return s;
-	// SSH GitHub
-	const sshGitHub = s.match(/^git@github\.com:([^/]+\/[^/#]+)(?:\.git)?(#.*)?$/);
-	if (sshGitHub) return `https://github.com/${sshGitHub[1]}${sshGitHub[2] || ''}`;
-	// Shorthand: owner/repo or owner/repo#ref
-	if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(#.*)?$/.test(s)) return `https://github.com/${s}`;
-	// github:owner/repo or github:owner/repo#ref
-	if (s.startsWith('github:')) return `https://github.com/${s.slice(7)}`;
-	return s;
+function assertData(value, label = 'data', depth = 0) {
+	if (depth > 40) throw new Error(`${label} is nested too deeply`);
+	if (value === null || ['string', 'boolean'].includes(typeof value) || (typeof value === 'number' && Number.isFinite(value))) return;
+	if (Array.isArray(value)) {
+		for (const entry of value) assertData(entry, label, depth + 1);
+		return;
+	}
+	if (!isPlainObject(value)) throw new Error(`${label} must contain JSON-compatible data only`);
+	for (const [key, entry] of Object.entries(value)) {
+		if (unsafeKeys.has(key)) throw new Error(`Unsafe ${label} key: ${key}`);
+		assertData(entry, label, depth + 1);
+	}
 }
 
-function toFileUrl(p) {
-	return new URL(`file://${p}`);
+function assertRelative(value, label) {
+	if (typeof value !== 'string' || !value || /[\x00-\x1f\x7f\\]/.test(value) || path.posix.isAbsolute(value) || path.win32.isAbsolute(value) || /^[A-Za-z]:/.test(value) || value.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error(`Unsafe ${label}: ${JSON.stringify(value)}`);
+	return value;
 }
+
+function projectPath(relative) {
+	assertRelative(relative, 'project path');
+	if (relative.split('/').some((part) => ['.git', 'node_modules', '.addon-cache'].includes(part))) throw new Error(`Protected project path: ${relative}`);
+	const target = path.resolve(cwd, relative);
+	if (target === fs.realpathSync(process.argv[1])) throw new Error('An addon cannot overwrite its own runner');
+	let current = cwd;
+	const parts = relative.split('/');
+	for (const [index, part] of parts.entries()) {
+		current = path.join(current, part);
+		try {
+			const stat = fs.lstatSync(current);
+			if (stat.isSymbolicLink()) throw new Error(`Symlink destination is not allowed: ${relative}`);
+			if (index < parts.length - 1 && !stat.isDirectory()) throw new Error(`Parent destination is not a directory: ${relative}`);
+			if (index === parts.length - 1 && !stat.isFile()) throw new Error(`Destination is not a regular file: ${relative}`);
+			if (stat.isFile() && stat.nlink > 1) throw new Error(`Hard-linked destination is not allowed: ${relative}`);
+		} catch (error) {
+			if (error.code !== 'ENOENT') throw error;
+		}
+	}
+	return target;
+}
+
+function readProjectFile(file) {
+	const target = projectPath(path.relative(cwd, file).split(path.sep).join('/'));
+	return pendingWrites.get(target) ?? fs.readFileSync(target, 'utf8');
+}
+
+function queueProjectFile(file, content) {
+	const target = projectPath(path.relative(cwd, file).split(path.sep).join('/'));
+	pendingWrites.set(target, content);
+}
+
+function writeProjectFiles() {
+	// Validate every destination before the first write; then recheck at each open.
+	for (const file of pendingWrites.keys()) projectPath(path.relative(cwd, file).split(path.sep).join('/'));
+	for (const [file, content] of pendingWrites) {
+		const relative = path.relative(cwd, file).split(path.sep).join('/');
+		projectPath(relative);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		projectPath(relative);
+		const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o644);
+		try {
+			if (!fs.fstatSync(fd).isFile() || fs.fstatSync(fd).nlink > 1) throw new Error(`Unsafe destination at write time: ${relative}`);
+			fs.ftruncateSync(fd, 0);
+			fs.writeFileSync(fd, content);
+		} finally { fs.closeSync(fd); }
+		console.log(`[addon] wrote ${JSON.stringify(relative)}`);
+	}
+}
+
+function parseSource(spec) {
+	if (typeof spec !== 'string' || /[\x00-\x20\x7f]/.test(spec)) throw new Error('Invalid repository');
+	const hash = spec.lastIndexOf('#');
+	let url = hash < 0 ? spec : spec.slice(0, hash);
+	const ref = hash < 0 ? 'HEAD' : spec.slice(hash + 1);
+	if (!ref || ref.startsWith('-') || /[\x00-\x20\x7f~^:?*\[\\]/.test(ref) || ref.includes('..')) throw new Error('Invalid repository ref');
+	if (url.startsWith('github:')) url = url.slice(7);
+	const ssh = url.match(/^git@github\.com:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/);
+	if (ssh) url = ssh[1];
+	if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(url)) url = `https://github.com/${url.replace(/\.git$/, '')}.git`;
+	if (path.isAbsolute(url)) url = fs.realpathSync(url);
+	else {
+		const parsed = new URL(url);
+		if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error('Use an HTTPS repository without embedded credentials, or an absolute local Git path');
+		url = parsed.href;
+	}
+	return { url, ref };
+}
+
+function git(args, directory, input, binary = false) {
+	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+	Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1' });
+	const result = spawnSync('git', ['-c', `core.hooksPath=${os.devNull}`, ...args], { cwd: directory, env, input, encoding: binary ? undefined : 'utf8', maxBuffer: 64 * 1024 * 1024 });
+	if (result.error || result.status !== 0) throw new Error(`Git ${args[0]} failed: ${result.error?.message ?? String(result.stderr).trim()}`);
+	return result.stdout;
+}
+
+async function fetchAddon() {
+	const source = parseSource(repo);
+	sourceUrl = source.url;
+	downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mota-addon-'));
+	let gitDir = path.join(downloadDir, 'repo.git');
+	git(['init', '--bare', gitDir], cwd);
+	// An approved commit is fetched directly, never re-resolved through a moving branch.
+	git(['fetch', '--no-tags', '--depth=1', '--', sourceUrl, options.commit ?? source.ref], gitDir);
+	resolvedCommit = git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'], gitDir).trim();
+	if (options.commit && resolvedCommit.toLowerCase() !== options.commit.toLowerCase()) throw new Error('Fetched commit differs from the reviewed commit');
+	const repositoryKey = createHash('sha256').update(sourceUrl).digest('hex');
+	const cacheRoot = fs.realpathSync(os.tmpdir());
+	const cachePath = path.join(cacheRoot, 'mota-addon-cache', repositoryKey, resolvedCommit);
+	if (options.cache && !dryRun) {
+		let parent = cacheRoot;
+		for (const part of ['mota-addon-cache', repositoryKey]) {
+			parent = path.join(parent, part);
+			if (!fs.existsSync(parent)) fs.mkdirSync(parent);
+			if (!fs.lstatSync(parent).isDirectory() || fs.lstatSync(parent).isSymbolicLink()) throw new Error('Unsafe source cache directory');
+		}
+		if (!fs.existsSync(cachePath)) fs.renameSync(gitDir, cachePath);
+		gitDir = cachePath;
+		if (fs.lstatSync(gitDir).isSymbolicLink()) throw new Error('Symlink source cache is not allowed');
+		git(['fsck', '--full', '--strict', '--no-reflogs'], gitDir);
+	}
+	const entries = git(['ls-tree', '-r', '-z', resolvedCommit], gitDir).split('\0').filter(Boolean).map((entry) => {
+		const match = /^(\d+) (\w+) ([a-f0-9]+)\t([\s\S]+)$/.exec(entry);
+		if (!match || !['100644', '100755'].includes(match[1]) || match[2] !== 'blob') throw new Error('Addon sources must be regular files; symlinks and submodules are not supported');
+		assertRelative(match[4], 'source path');
+		if (match[4].split('/').includes('.git')) throw new Error('Protected .git source path');
+		return { mode: match[1], oid: match[3], name: match[4] };
+	});
+	tmpDir = path.join(downloadDir, 'source');
+	fs.mkdirSync(tmpDir);
+	if (entries.length) {
+		const blobs = git(['cat-file', '--batch'], gitDir, entries.map((entry) => entry.oid).join('\n') + '\n', true);
+		let offset = 0;
+		for (const entry of entries) {
+			const end = blobs.indexOf(10, offset);
+			const header = blobs.subarray(offset, end).toString();
+			const match = /^([a-f0-9]+) blob (\d+)$/.exec(header);
+			if (!match || match[1] !== entry.oid) throw new Error('Invalid source object');
+			const size = Number(match[2]);
+			const body = blobs.subarray(end + 1, end + 1 + size);
+			const digest = createHash(entry.oid.length === 64 ? 'sha256' : 'sha1').update(`blob ${size}\0`).update(body).digest('hex');
+			if (body.length !== size || digest !== entry.oid) throw new Error('Source object integrity check failed');
+			const file = path.join(tmpDir, entry.name);
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, body, { mode: entry.mode === '100755' ? 0o755 : 0o644 });
+			offset = end + size + 2;
+		}
+	}
+}
+
+function resolveActionDir() {
+	const nested = path.join(tmpDir, '_templates', generator, action);
+	return fs.existsSync(nested) ? nested : path.join(tmpDir, generator, action);
+}
+
+function listFiles(directory) {
+	const files = [];
+	for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+		const file = path.join(directory, entry.name);
+		if (entry.isSymbolicLink()) throw new Error('Addon source symlinks are not supported');
+		if (entry.isDirectory()) files.push(...listFiles(file));
+		else if (entry.isFile()) files.push(file);
+	}
+	return files;
+}
+
+function loadManifest(actionDir) {
+	const file = path.join(actionDir, 'addon.json');
+	if (!fs.existsSync(file)) return { version: 1 };
+	const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+	assertData(manifest, 'manifest');
+	if (!isPlainObject(manifest) || manifest.version !== 1) throw new Error('addon.json requires version: 1');
+	for (const key of Object.keys(manifest)) if (!['version', 'description', 'packages', 'migrations'].includes(key)) throw new Error(`Unknown addon.json field: ${key}`);
+	if (manifest.packages !== undefined) {
+		if (!isPlainObject(manifest.packages)) throw new Error('packages must be an object');
+		for (const [group, specifications] of Object.entries(manifest.packages)) {
+			if (!['dependencies', 'devDependencies'].includes(group) || !Array.isArray(specifications)) throw new Error('packages requires dependencies/devDependencies arrays');
+			for (const spec of specifications) if (typeof spec !== 'string' || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(spec)) throw new Error(`Package must use a name and exact registry version: ${JSON.stringify(spec)}`);
+		}
+	}
+	if (manifest.migrations !== undefined) {
+		if (!Array.isArray(manifest.migrations)) throw new Error('migrations must be an array');
+		for (const migration of manifest.migrations) {
+			if (!isPlainObject(migration) || typeof migration.name !== 'string' || typeof migration.command !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(migration.command) || !Array.isArray(migration.args) || !migration.args.every((arg) => typeof arg === 'string' && !arg.includes('\0')) || Object.keys(migration).some((key) => !['name', 'command', 'args'].includes(key))) throw new Error('Migration requires name, executable command (no path), and a string args array');
+			if (!migration.args.some((arg) => arg.includes('{{target}}'))) throw new Error('Every migration must explicitly use {{target}} in its args');
+		}
+	}
+	return manifest;
+}
+
+function printPlan(actionDir, manifest) {
+	console.log(`[addon] Repository: ${JSON.stringify(sourceUrl)}`);
+	console.log(`[addon] Commit: ${resolvedCommit}`);
+	console.log(`[addon] Action: ${generator}/${action}`);
+	for (const file of listFiles(actionDir)) {
+		const relative = path.relative(actionDir, file).split(path.sep).join('/');
+		const raw = fs.readFileSync(file, 'utf8');
+		const destination = raw.match(/^to:\s*(.*)$/m)?.[1];
+		console.log(`[inspect] ${JSON.stringify(relative)}${destination ? ` -> ${JSON.stringify(destination)}${destination.includes('<%') ? ' (dynamic destination: unknown until execution)' : ''}` : ''}`);
+	}
+	console.log(`[inspect] Declared packages: ${JSON.stringify(manifest.packages ?? {})}`);
+	console.log(`[inspect] Declared migrations: ${JSON.stringify(manifest.migrations ?? [])}`);
+	console.log('[inspect] EJS, prompts and explicitly allowed shell scripts have host permissions and may have undeclared effects, including installs or DB changes. Stage controls are not a sandbox.');
+	console.log(`[stages] generation=${!dryRun && !options['migrations-only'] ? 'enabled' : 'inspection only'} prompts=${!!options['allow-prompts']} scripts=${!!options['allow-scripts'] && !noScripts} packages=${!!options['allow-packages']} lifecycle=${!!options['allow-package-scripts']} migrations=${!!options['run-migrations']} target=${JSON.stringify(options['migration-target'] ?? null)}`);
+	if (dryRun) console.log(`[inspect] To apply, omit --dry-run. Optionally pin this source with --commit ${resolvedCommit}. Other executable stages remain opt-in.`);
+}
+
+function runCommand(command, args, env = process.env) {
+	console.log(`[addon] command ${JSON.stringify([command, ...args])}`);
+	const result = spawnSync(command, args, { cwd, env, stdio: 'inherit', shell: false });
+	if (result.error || result.status !== 0) throw new Error(`Command failed: ${command} (status ${result.status ?? 'unavailable'})`);
+}
+
+function installPackages(manifest) {
+	if (!options['allow-packages'] || !Object.values(manifest.packages ?? {}).some((specs) => specs.length)) return;
+	const packageFile = projectPath('package.json');
+	const pkg = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
+	if ((pkg.packageManager && !pkg.packageManager.startsWith('npm@')) || ['pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'].some((name) => fs.existsSync(path.join(cwd, name)))) throw new Error('Declared package installation currently supports npm projects only; use this project\'s manager explicitly instead');
+	for (const [group, specs] of Object.entries(manifest.packages ?? {})) {
+		if (!specs.length) continue;
+		runCommand('npm', ['install', '--save-exact', ...(group === 'devDependencies' ? ['--save-dev'] : []), ...(!options['allow-package-scripts'] ? ['--ignore-scripts'] : []), '--', ...specs]);
+	}
+}
+
+function runMigrations(manifest) {
+	if (!manifest.migrations?.length) throw new Error('No migrations declared in addon.json');
+	for (const migration of manifest.migrations) {
+		const args = migration.args.map((arg) => arg.replaceAll('{{target}}', options['migration-target']));
+		runCommand(migration.command, args, { ...process.env, ADDON_MIGRATION_TARGET: options['migration-target'], ADDON_COMMIT: resolvedCommit });
+	}
+}
+
+function toFileUrl(file) { return pathToFileURL(file); }
 
 function isPlainObject(v) {
-	return v !== null && typeof v === 'object' && !Array.isArray(v);
+	return v !== null && typeof v === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(v));
 }
 
 function deepMerge(target, source) {
@@ -147,8 +399,11 @@ function extractExpr(value) {
 	if (typeof value !== 'string') return null;
 	const trimmed = value.trim();
 
-	const m = trimmed.match(/^\$expr\((['"])([\s\S]*)\1\)$/);
-	return m ? m[2] : null;
+	const m = trimmed.match(/^\$expr\(([\s\S]*)\)$/);
+	if (!m) return null;
+	if (!options['allow-expressions']) throw new Error('Raw $expr values require --allow-expressions');
+	const body = m[1].trim();
+	return /^(['"])[\s\S]*\1$/.test(body) ? body.slice(1, -1) : body;
 }
 
 function replaceExprs(value) {
@@ -263,160 +518,91 @@ function composeNavbarArray(source, propertyName, specification) {
 	return source.slice(0, arrayOpen + 1) + body + source.slice(arrayClose);
 }
 
-async function fetchAddon() {
-	if (useCache && fs.existsSync(tmpDir)) return;
-
-	fs.mkdirSync(tmpDir, { recursive: true });
-	// Use HTTPS URL so clone works without SSH keys (public repos)
-	const cloneUrl = repoToHttps(repo);
-	const emitter = tiged(cloneUrl, { mode: 'git' });
-	await emitter.clone(tmpDir);
-	ensureTemplatesLayout();
-}
-
-const TMPLS_DIR = '_templates';
-
-/** Ensure tmpDir has _templates/generator/action so HYGEN_TMPLS can point at _templates; move root-level generator dirs into _templates if needed. */
-function ensureTemplatesLayout() {
-	const templatesPath = path.join(tmpDir, TMPLS_DIR);
-	const actionInTemplates = path.join(templatesPath, generator, action);
-	if (fs.existsSync(actionInTemplates)) return;
-
-	// Clone has generator/action at root; create _templates and move generator dirs into it
-	fs.mkdirSync(templatesPath, { recursive: true });
-	const entries = fs.readdirSync(tmpDir, { withFileTypes: true });
-	for (const ent of entries) {
-		if (!ent.isDirectory() || ent.name === TMPLS_DIR || ent.name === '.git') continue;
-		const src = path.join(tmpDir, ent.name);
-		const dest = path.join(templatesPath, ent.name);
-		fs.renameSync(src, dest);
-	}
-}
-
-function resolveActionDir() {
-	return path.join(tmpDir, TMPLS_DIR, generator, action);
-}
-
 async function loadPrompts(actionDir) {
+	let answers = options.answers ? JSON.parse(options.answers) : {};
+	if (!isPlainObject(answers)) throw new Error('--answers must be a JSON object');
+	assertData(answers, 'answers');
 	const promptFile = path.join(actionDir, 'prompt.js');
-	if (!fs.existsSync(promptFile)) return {};
-
-	const mod = await import(toFileUrl(promptFile));
-	const exported = mod.default ?? mod;
-	const onCancel = () => {
-		console.log('\n[addon] Cancelled.');
-		process.exit(130);
-	};
-	const runPrompts = (questions) => prompts(questions, { onCancel });
-
-	if (typeof exported === 'function') {
-		const result = await exported({ prompts: runPrompts, cwd, generator, action, repo });
-		return result || {};
+	if (options['allow-prompts'] && fs.existsSync(promptFile)) {
+		const mod = await import(toFileUrl(promptFile));
+		const exported = mod.default ?? mod;
+		const runPrompts = (questions) => prompts(questions, { onCancel: () => { throw new Error('Cancelled'); } });
+		const result = typeof exported === 'function'
+			? await exported({ prompts: runPrompts, cwd, generator, action, repo, commit: resolvedCommit })
+			: Array.isArray(exported) ? await runPrompts(exported) : {};
+		answers = { ...result, ...answers };
 	}
-
-	if (Array.isArray(exported)) {
-		return await runPrompts(exported);
+	assertData(answers, 'answers');
+	for (const key of Object.keys(answers)) {
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || ['generator', 'action', 'templates', 'actionfolder', 'cwd', 'h', 'attributes'].includes(key)) throw new Error(`Reserved or invalid answer key: ${key}`);
 	}
-
-	return {};
+	// Never enable the legacy auto-migration prompt through generation.
+	if (answers.runMigration) throw new Error('runMigration is disabled during generation; use the separate declared migration stage');
+	return answers;
 }
 
-function buildCliArgsFromLocals(locals) {
-	return Object.entries(locals).flatMap(([key, value]) => {
-		if (value === undefined || value === null) return [];
-		if (typeof value === 'object') return [`--${key}`, JSON.stringify(value)];
-		return [`--${key}`, String(value)];
-	});
-}
-
-function runHygen(locals) {
-	const args = [
-		'hygen',
-		generator,
-		action,
-		...buildCliArgsFromLocals(locals)
-	];
-
-	// Point Hygen at _templates inside the clone (cleaned with tmpDir when !useCache)
-	const hygenTmpls = path.join(tmpDir, TMPLS_DIR);
-	const promptFile = path.join(hygenTmpls, generator, action, 'prompt.js');
-	// The add-on runner has already collected prompt values. Move the prompt
-	// outside HYGEN_TMPLS so Hygen cannot execute or render the renamed file.
-	const hiddenPromptFile = path.join(tmpDir, `.addon-runner-prompt-${process.pid}-${Date.now()}.js`);
-	if (fs.existsSync(promptFile)) fs.renameSync(promptFile, hiddenPromptFile);
-	let result;
-	try {
-		result = spawnSync('npx', args, {
-			stdio: 'inherit',
-			cwd,
-			env: { ...process.env, HYGEN_TMPLS: hygenTmpls }
-		});
-	} finally {
-		if (fs.existsSync(hiddenPromptFile)) fs.renameSync(hiddenPromptFile, promptFile);
+function renderTemplates(actionDir, locals) {
+	// Use only the installed front-matter/context utilities, not Hygen's runner,
+	// project .hygen.js, addon index.js, shell/setup hooks or unsafe YAML loader.
+	const hygenRequire = createRequire(projectRequire.resolve('hygen'));
+	const frontMatter = hygenRequire('front-matter');
+	const context = hygenRequire('./context.js').default;
+	const injector = hygenRequire('./ops/injector.js').default;
+	const templatesRoot = actionDir.startsWith(path.join(tmpDir, '_templates') + path.sep) ? path.join(tmpDir, '_templates') : tmpDir;
+	const templateLocals = context({ ...locals, generator, action, cwd, templates: templatesRoot, actionfolder: actionDir });
+	const supported = new Set(['to', 'inject', 'unless_exists', 'force', 'from', 'skip_if', 'before', 'after', 'prepend', 'append', 'at_line', 'eof_last', 'message']);
+	for (const file of listFiles(actionDir).filter((file) => file.endsWith('.t'))) {
+		const parsed = frontMatter(fs.readFileSync(file, 'utf8'), { allowUnsafe: false });
+		assertData(parsed.attributes, 'template attributes');
+		const attributes = {};
+		for (const [key, value] of Object.entries(parsed.attributes)) {
+			if (!supported.has(key)) throw new Error(`Unsupported template attribute ${key}; shell/setup hooks are not allowed`);
+			attributes[key] = typeof value === 'string' ? ejs.render(value, templateLocals, { filename: file }) : value;
+		}
+		if (!attributes.to) continue;
+		if (attributes.skip_if === 'true' || attributes.skip_if === true) continue;
+		const to = projectPath(attributes.to);
+		if (attributes.unless_exists && (pendingWrites.has(to) || fs.existsSync(to))) continue;
+		if (attributes.force && !options.overwrite && fs.existsSync(to)) throw new Error(`--overwrite is required to replace ${attributes.to}`);
+		let body;
+		if (attributes.from) {
+			assertRelative(attributes.from, 'template from path');
+			const from = path.join(templatesRoot, attributes.from);
+			if (!fs.existsSync(from) || !fs.statSync(from).isFile()) throw new Error(`Missing template from file: ${attributes.from}`);
+			body = fs.readFileSync(from, 'utf8');
+		} else body = ejs.render(parsed.body, { ...templateLocals, attributes }, { filename: file });
+		if (attributes.inject) {
+			if (!fs.existsSync(to) && !pendingWrites.has(to)) throw new Error(`Injection destination does not exist: ${attributes.to}`);
+			body = injector({ attributes, body }, readProjectFile(to));
+		} else if ((fs.existsSync(to) || generatedDestinations.has(to)) && !options.overwrite) throw new Error(`--overwrite is required to replace ${attributes.to}`);
+		generatedDestinations.add(to);
+		queueProjectFile(to, body);
 	}
-
-	if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-function renderEjsFile(filePath, locals) {
-	const raw = fs.readFileSync(filePath, 'utf8');
-	return ejs.render(raw, locals, { filename: filePath });
-}
-
-/** Return list of dirs to search: [actionDir, actionDir/subFolder] if subFolder exists. */
 function searchDirs(actionDir, subFolder) {
-	const dirs = [actionDir];
 	const sub = path.join(actionDir, subFolder);
-	if (fs.existsSync(sub) && fs.statSync(sub).isDirectory()) dirs.push(sub);
-	return dirs;
+	return fs.existsSync(sub) && fs.statSync(sub).isDirectory() ? [actionDir, sub] : [actionDir];
+}
+
+function selectedHiddenScript(actionDir) {
+	for (const dir of searchDirs(actionDir, '_scripts')) {
+		for (const name of ['_scripts.ejs.sh', '_scripts.sh']) {
+			const file = path.join(dir, name);
+			if (fs.existsSync(file)) return file;
+		}
+	}
+	return null;
 }
 
 function runHiddenScript(actionDir, locals) {
-	if (noScripts) return;
-	const candidates = ['_scripts.ejs.sh', '_scripts.sh'];
-
-	for (const dir of searchDirs(actionDir, '_scripts')) {
-		for (const name of candidates) {
-			const file = path.join(dir, name);
-			if (!fs.existsSync(file)) continue;
-			if (dryRun) {
-				console.log(`[dry-run] skipping script ${name}`);
-				return;
-			}
-
-			let script = fs.readFileSync(file, 'utf8');
-			if (name.endsWith('.ejs.sh')) {
-				script = ejs.render(script, locals, { filename: file });
-			}
-
-			const tmpScript = path.join(os.tmpdir(), `addon-script-${Date.now()}.sh`);
-			fs.writeFileSync(tmpScript, script, { mode: 0o755 });
-
-			const env = {
-				...process.env,
-				ADDON_REPO: repo,
-				ADDON_GENERATOR: generator,
-				ADDON_ACTION: action,
-				ADDON_CONTEXT_JSON: JSON.stringify(locals)
-			};
-
-			for (const [key, value] of Object.entries(locals)) {
-				const envKey = `ADDON_VAR_${String(key).toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
-				env[envKey] = typeof value === 'object' ? JSON.stringify(value) : String(value);
-			}
-
-			const result = spawnSync('bash', [tmpScript], {
-				stdio: 'inherit',
-				cwd,
-				env
-			});
-
-			fs.rmSync(tmpScript, { force: true });
-
-			if (result.status !== 0) process.exit(result.status ?? 1);
-			return;
-		}
-	}
+	if (noScripts || !options['allow-scripts']) return;
+	const script = selectedHiddenScript(actionDir);
+	if (!script) return;
+	// Prompt strings are data in the environment, never interpolated into shell source.
+	const env = { ...process.env, ADDON_REPO: sourceUrl, ADDON_COMMIT: resolvedCommit, ADDON_GENERATOR: generator, ADDON_ACTION: action, ADDON_CONTEXT_JSON: JSON.stringify(locals) };
+	for (const [key, value] of Object.entries(locals)) env[`ADDON_VAR_${key.toUpperCase()}`] = typeof value === 'object' ? JSON.stringify(value) : String(value);
+	runCommand('bash', [script], env);
 }
 
 function findModulesBlock(content) {
@@ -712,7 +898,7 @@ function applyHiddenLang(actionDir, locals) {
 		const langCode = lang.toLowerCase();
 		const pathFromFile = hasEjs ? undefined : pathSuffix;
 		const i18nPath = path.join(cwd, 'src', 'i18n', langCode, 'index.ts');
-		if (!fs.existsSync(i18nPath)) {
+		if (!fs.existsSync(i18nPath) && !pendingWrites.has(i18nPath)) {
 			if (!dryRun) console.warn(`[addon] Skipping _lang: src/i18n/${langCode}/index.ts not found`);
 			continue;
 		}
@@ -726,6 +912,8 @@ function applyHiddenLang(actionDir, locals) {
 			text = ejs.render(text, locals, { filename: path.join(actionDir, name) });
 		}
 		let parsed = JSON5.parse(text);
+			assertData(parsed, 'config/translation');
+			if (!isPlainObject(parsed)) throw new Error('Config/translation must be an object');
 		parsed = replaceExprs(parsed);
 
 		const $remove = parsed.$remove;
@@ -733,10 +921,11 @@ function applyHiddenLang(actionDir, locals) {
 		delete parsed.$remove;
 		delete parsed.$path;
 
-		const pathParts = $path.split('.').filter(Boolean);
+		if (typeof $path !== 'string' || !$path.split('.').every((part) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(part) && !unsafeKeys.has(part))) throw new Error('Unsafe translation $path');
+		const pathParts = $path.split('.');
 		if (pathParts.length < 1) continue;
 
-		const src = fs.readFileSync(i18nPath, 'utf8');
+		const src = readProjectFile(i18nPath);
 		const rootBlock = findI18nRootObject(src);
 		if (!rootBlock) {
 			console.warn(`[addon] No root object found in ${i18nPath}`);
@@ -780,21 +969,14 @@ function applyHiddenLang(actionDir, locals) {
 
 		const newRootRaw = mapToTsRaw(rootMap, I18N_INDENT, true);
 		const next = src.slice(0, rootBlock.start) + newRootRaw + src.slice(rootBlock.end);
-		fs.writeFileSync(i18nPath, next);
+		queueProjectFile(i18nPath, next);
 		applied = true;
 	}
 	return applied;
 }
 
 function runTypesafeI18n() {
-	if (dryRun) return;
-	const result = spawnSync('npx', ['typesafe-i18n', '--no-watch'], {
-		cwd,
-		stdio: 'inherit'
-	});
-	if (result.status !== 0) {
-		console.warn('[addon] typesafe-i18n failed or is not installed; i18n types may be out of date.');
-	}
+	console.log('[addon] Translation dictionaries changed. Regenerate types with the project i18n:extract script after reviewing the diff.');
 }
 
 function applyHiddenConfig(actionDir, locals) {
@@ -816,6 +998,8 @@ function applyHiddenConfig(actionDir, locals) {
 			}
 
 			let parsed = JSON5.parse(text);
+			assertData(parsed, 'config/translation');
+			if (!isPlainObject(parsed)) throw new Error('Config/translation must be an object');
 			parsed = replaceExprs(parsed);
 			const navbarItems = parsed.$navbarItems;
 			delete parsed.$navbarItems;
@@ -823,9 +1007,9 @@ function applyHiddenConfig(actionDir, locals) {
 			delete parsed.$authItems;
 
 			const viteFile = path.join(cwd, 'vite.config.ts');
-			if (!fs.existsSync(viteFile)) return;
+			if (!fs.existsSync(viteFile) && !pendingWrites.has(viteFile)) return;
 
-			const src = fs.readFileSync(viteFile, 'utf8');
+			const src = readProjectFile(viteFile);
 			let composedSrc = composeNavbarArray(src, 'items', navbarItems);
 			composedSrc = composeNavbarArray(composedSrc, 'authItems', authItems);
 			const block = findModulesBlock(composedSrc);
@@ -847,36 +1031,41 @@ function applyHiddenConfig(actionDir, locals) {
 			const newBlock = objectToTs(current, 0, baseIndent);
 			const next = composedSrc.slice(0, block.start) + newBlock + composedSrc.slice(block.end);
 
-			fs.writeFileSync(viteFile, next);
+			queueProjectFile(viteFile, next);
 			return;
 		}
 	}
 }
 
 async function main() {
+	if (argv.includes('--help') || argv.includes('-h')) { usage(); return; }
+	if (!repo || !generator || !action) { usage(); throw new Error('Repository, generator and action are required'); }
+	parseOptions();
 	await fetchAddon();
-	ensureTemplatesLayout();
-
 	const actionDir = resolveActionDir();
-	if (!fs.existsSync(actionDir)) {
-		console.error(`Addon action not found: ${generator}/${action}`);
-		process.exit(1);
-	}
-
+	if (!fs.existsSync(actionDir) || !fs.statSync(actionDir).isDirectory()) throw new Error(`Addon action not found: ${generator}/${action}`);
+	const manifest = loadManifest(actionDir);
+	printPlan(actionDir, manifest);
+	if (dryRun) return;
+	if (options['migrations-only']) { runMigrations(manifest); return; }
+	const script = selectedHiddenScript(actionDir);
+	if (options['allow-scripts'] && !noScripts && script && /<%/.test(fs.readFileSync(script, 'utf8'))) throw new Error('Templated shell scripts are no longer supported. Use plain _scripts.sh with validated ADDON_VAR_* environment values; declare packages/migrations in addon.json.');
+	ejs = projectRequire('ejs');
+	JSON5 = projectRequire('json5');
+	prompts = projectRequire('prompts');
 	const locals = await loadPrompts(actionDir);
-
-	runHygen(locals);
-	runHiddenScript(actionDir, locals);
+	renderTemplates(actionDir, locals);
 	applyHiddenConfig(actionDir, locals);
 	const langApplied = applyHiddenLang(actionDir, locals);
+	writeProjectFiles();
+	installPackages(manifest);
+	runHiddenScript(actionDir, locals);
 	if (langApplied) runTypesafeI18n();
-
-	if (!useCache) {
-		fs.rmSync(tmpDir, { recursive: true, force: true });
-	}
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
+main().catch((error) => {
+	console.error(`[addon] ${error.message}`);
+	process.exitCode = 1;
+}).finally(() => {
+	if (downloadDir) fs.rmSync(downloadDir, { recursive: true, force: true });
 });
