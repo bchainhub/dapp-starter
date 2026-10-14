@@ -49,7 +49,7 @@ node start.mjs --update --template https://github.com/your-org/your-template.git
 - Template is cloned to a temp dir; its contents are copied over your project (excluding `.git` and `node_modules`). Your **`vite.config.ts`** is backed up and restored so it is never replaced.
 - On success you get: *Project updated from template. vite.config.ts was preserved.*
 
-The starter always targets SvelteKit `^3.0.0`, allowing the latest 3.x release on a fresh install. New projects receive `#lib` package import mappings and TypeScript `~6.0.3` (Kit requires its JavaScript API). Projects are detected by their SvelteKit dependency, without requiring the removed `svelte.config.js` file. The Svelte CLI (`sv@latest`) has its own version number, separate from SvelteKit.
+The starter always targets SvelteKit `^3.0.0`, allowing the latest 3.x release on a fresh install. New projects receive `#lib`, `#data`, `#components` and `#modules/*` package import mappings and TypeScript `~6.0.3` (Kit requires its JavaScript API). Projects are detected by their SvelteKit dependency, without requiring the removed `svelte.config.js` file. The Svelte CLI (`sv@latest`) has its own version number, separate from SvelteKit.
 
 Before updating a SvelteKit 2 project, follow the [SvelteKit 3 migration guide](https://svelte.dev/docs/kit/migrating-to-sveltekit-3). Update mode preserves Vite configuration and refuses to apply the new template to an unmigrated project. Existing `src/env.ts` declarations are also preserved. After updating, run your package manager install to refresh the lockfile and generated types.
 
@@ -73,10 +73,10 @@ If you still hit peer conflicts, or you are not using this installer, create a `
 legacy-peer-deps=true
 ```
 
-Copy-paste to create the file:
+Merge the compatibility setting without replacing registry/auth settings:
 
 ```bash
-printf 'legacy-peer-deps=true\n' > .npmrc
+npm config set legacy-peer-deps=true --location=project
 ```
 
 Commit `.npmrc` if you want the same behavior in CI and deployment pipelines that run `npm install`.
@@ -112,474 +112,192 @@ The selected package is installed as a runtime dependency using the project's pa
 
 ## Addon CLI
 
-After installation, projects can run:
+Use the project's installed runner. Applying directly to the current project is the default; `--dry-run` optionally performs a **static inspection** instead:
 
-```bash
-npx addon <repo> <generator> <action> [options]
+```sh
+node bin/addon.mjs owner/repo generator install --dry-run
 ```
 
-Examples:
+The report shows the normalized repository, resolved full commit SHA, files, static destination hints, declared packages/migrations and enabled stages. Dynamic output paths and arbitrary code effects remain unknown until execution. Inspection does not import prompt.js, render EJS, execute hooks/scripts, install dependencies, regenerate translations or write project files. Fetching source uses a temporary directory outside the project.
 
-```bash
-npx addon bchainhub@mota-addon-support support install
-npx addon owner/repo name-of-addon uninstall
-npx addon owner/repo name-of-addon install -c
-npx addon owner/repo name-of-addon install -d
+Apply directly using the selected repository/ref:
+
+```sh
+node bin/addon.mjs owner/repo generator install --answers '{"route":"account"}'
 ```
 
-**Versioning:** You can pin a release, branch, or commit by appending `#<ref>` to the repo (the addon uses tiged, which supports git refs). For example, for release `1.2.3` use a tag such as `v1.2.3` or `1.2.3`:
+`--apply` is an optional explicit alias for the default behavior and cannot be combined with `--dry-run`. `--commit FULL_SHA` optionally pins the full SHA printed by inspection; without it, the requested repository ref (or default HEAD) is resolved at invocation time. There is no project copy or execution sandbox: approved EJS, prompts and shell commands retain host permissions. Review their effects before enabling them.
 
-```bash
-npx addon owner/repo#v1.2.3 name-of-addon install
-npx addon owner/repo#1.2.3 name-of-addon install
-```
+Repository input accepts owner/repo, github:owner/repo, HTTPS URL, or an absolute local Git repository path. Addon refs use `#branch`, `#tag` or `#commit` (quote the argument), not the installer's `@version` template syntax. Generator and action must each be one letters/digits/hyphen/underscore segment. HTTPS URLs cannot contain credentials or query parameters. Git hooks/global config are disabled for retrieval; use a local reviewed checkout for sources needing custom authentication configuration.
 
-Use `#branch` for a branch or `#<commit-hash>` for a specific commit.
+`npx addon ...` remains a convenience alias only when it resolves to this installed runner. Prefer `node bin/addon.mjs` to avoid an unintended npm-registry fallback.
 
-**Options (short and long):**
+### Stage controls
 
-| Flag | Short | Effect |
-| --- | --- | --- |
-| `--cache` | `-c` | Use cache dir for repo (faster re-runs). |
-| `--dry-run` | `-d` | No writes; script/config/lang steps are skipped. |
-| `--no-translations` | `-nt` | Skip _lang (translations) processing. |
-| `--no-scripts` | `-ns` | Skip _scripts execution. |
-| `--no-config` | `-nc` | Skip _config merge. |
+| Option | Effect |
+| --- | --- |
+| No execution flag, or `--apply` | Render/generate files and merge enabled config/translations directly |
+| `--commit SHA` | Optionally pin an exact full commit instead of resolving the repository ref |
+| `--dry-run`, `-d` | Static inspection only; no addon execution or project writes |
+| `--answers JSON` | Non-secret prompt data, supplied without executing prompt.js |
+| `--allow-prompts` | Execute reviewed prompt.js; explicit --answers values override collected values |
+| `--allow-scripts` | Run the selected reviewed plain hidden shell script after file/package stages |
+| `--allow-expressions` | Permit raw `$expr(...)` config/translation values |
+| `--allow-packages` | Install exact registry versions declared in addon.json; npm lifecycle scripts disabled |
+| `--allow-package-scripts` | Also permit npm dependency lifecycle scripts; requires --allow-packages |
+| `--run-migrations --migrations-only --migration-target NAME` | Separate migration-only invocation with an explicit named target |
+| `--overwrite` | Allow generated files to replace existing files; template force does not bypass this |
+| `--cache`, `-c` | Cache source Git objects by normalized repository and full commit outside the project during apply |
+| `--no-scripts`, `-ns` | Skip the hidden script stage |
+| `--no-config`, `-nc` | Skip hidden config merge |
+| `--no-translations`, `-nt` | Skip hidden translation merge |
 
-## Addon structure
+Plain _config/_lang merges run during application (the default); EJS used in them is executable code. Source symlinks/submodules are rejected. Destination validation rejects absolute paths, .. components, Windows/backslash paths, symlink/hard-link destinations, .git, node_modules, .addon-cache and overwriting the runner itself. All runner-managed output is validated before the first write. This constrains the file writer, not arbitrary explicitly enabled JavaScript or shell code.
 
-An addon repository contains generator/action folders. Hidden files `_scripts`, `_config`, and `_lang` can live **either** in the action root **or** inside optional subfolders of the same name:
+Raw shell `sh`/`setup` template hooks, addon index.js, project .hygen.js and unsafe YAML tags are not executed by the controlled template renderer. The installed Hygen front-matter/context/injection utilities are used without invoking its CLI engine. Reviewable output is kept in memory until validation, then written directly into the project. File application is not a multi-file transaction; inspect the working tree if a later I/O or explicit command fails.
+
+### Exact source and cache identity
+
+Each invocation resolves the selected branch/tag to a commit and reports it. Without --commit, a later invocation can resolve to a newer commit. With optional --commit SHA, apply fetches **that SHA directly**, even if the branch moves afterward. Cache keys include repository and full commit; cached Git objects are integrity-checked, and blob IDs are verified before materializing addon source. No working checkout, Git filters or addon package lifecycle scripts run during fetching. A cache is not evidence that code is trustworthy. Current apply still verifies/fetches the selected commit, so the cache is not an offline-install guarantee.
+
+## Addon action structure
+
+Both generator/action and _templates/generator/action layouts are supported:
 
 ```text
-<repo>/
-  <generator>/
-    <action>/
-      prompt.js
-      *.ejs.t
-      _scripts.ejs.sh    or  _scripts/_scripts.ejs.sh
-      _scripts.sh            _scripts/_scripts.sh
-      _config.ejs.json5  or  _config/_config.ejs.json5
-      _config.json5          _config/_config.json5
-      _lang.sk.json5     or  _lang/sk.json5, _lang/en.ejs.json5, ...
-      _lang.en.json5         _lang/en.json5
-```
-
-### The `_migrations` folder
-
-A `_migrations` folder may be created or copied into your project (e.g. by addons or the template). It is intended for database migrations. It is listed in `.gitignore`, so it **will not be committed** to the git repository - but you can change it to commit it if you want.
-
-You need to configure your app to use this folder. For example, with **Drizzle ORM** set `out` to `./_migrations` in your config:
-
-```ts
-import { defineConfig } from "drizzle-kit";
-
-export default defineConfig({
-  schema: "./src/db/schema.ts",
-  out: "./_migrations",   // 👈 custom migrations folder
-  dialect: "postgresql",
-  dbCredentials: {
-    url: process.env.DATABASE_URL!,
-  },
-});
-```
-
-To execute migrations, add the intended migration command to your `_scripts.ejs.sh` or `_scripts.sh` scripts.
-
-For example:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-npx drizzle-kit push
-```
-
-## What each file does
-
-### `prompt.js`
-
-Optional. Collects prompt values once.
-
-Those same values are then reused by:
-
-- Hygen templates
-- hidden scripts
-- hidden config
-
-A `prompt.js` file can export either:
-
-- an array of prompt definitions
-- a function returning an answers object
-
-Example array export:
-
-```js
-export default [
-  {
-    type: 'text',
-    name: 'provider',
-    message: 'Auth provider'
-  },
-  {
-    type: 'text',
-    name: 'route',
-    message: 'Route name',
-    initial: 'auth'
-  }
-];
-```
-
-Example function export:
-
-```js
-export default async ({ prompts, cwd, generator, action, repo }) => {
-  const answers = await prompts([
-    {
-      type: 'text',
-      name: 'provider',
-      message: 'Auth provider'
-    }
-  ]);
-
-  return answers;
-};
-```
-
-### `*.ejs.t`
-
-Normal Hygen templates. These generate or inject project files.
-
-Example:
-
-```text
----
-to: src/routes/auth/+page.svelte
----
-<h1>Hello</h1>
-```
-
-These are the only files in the addon action folder that generate normal project output.
-
-### `_scripts.ejs.sh` / `_scripts.sh`
-
-Optional hidden control files.
-
-They are:
-
-- executed automatically after Hygen
-- never copied into the user project
-- useful for `npm install`, `pnpm add`, formatting, cleanup, and post-generation actions
-
-If you use `_scripts.ejs.sh`, prompt values are available through EJS:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-npm install <%= packageName %>
-echo "Configured route: <%= routeName %>"
-```
-
-Prompt values are also exposed as environment variables:
-
-- `ADDON_CONTEXT_JSON`
-- `ADDON_REPO`
-- `ADDON_GENERATOR`
-- `ADDON_ACTION`
-- `ADDON_VAR_<NAME>`
-
-Example:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "$ADDON_VAR_PROVIDER"
-echo "$ADDON_CONTEXT_JSON"
-```
-
-Use `_scripts.sh` when you do not need EJS interpolation.
-Use `_scripts.ejs.sh` when you want prompt-driven values inserted directly into the script before execution.
-
-### `_config.ejs.json5` / `_config.json5`
-
-Optional hidden config files.
-
-They are:
-
-- rendered automatically after Hygen
-- never copied into the user project
-- currently applied to the `modules` block in `vite.config.ts`
-
-**Important:** This config is **client-side**. Never put secrets or server-only configuration here—it can end up in the client bundle.
-
-For secrets and server config, use the official SvelteKit approach: `$app/env/private`, with variables declared using `defineEnvVars` in `src/env.ts`. Only mark a variable `public: true` when it is safe to expose to the browser; public variables are imported from `$app/env/public`.
-
-Use `_config.ejs.json5` when you want prompt values interpolated before merge:
-
-```json5
-{
-  auth: {
-    enabled: true,
-    provider: "<%= provider %>",
-    route: "<%= route %>"
-  }
-}
-```
-
-Use `_config.json5` when no interpolation is needed.
-
-### `_lang` (translations)
-
-Optional. Language files are merged into `src/i18n/<lang>/index.ts` (e.g. `src/i18n/en/index.ts`). They can live in the action root or inside a `_lang/` folder.
-
-- **In action root:** `_lang.<code>.json5` or `_lang.<code>.<pathSuffix>.json5`, e.g. `_lang.sk.json5`, `_lang.en.content.ejs.json5`.
-- **In `_lang/` folder:** `<code>.json5` or `<code>.<pathSuffix>.json5`, e.g. `sk.json5`, `en.content.ejs.json5`.
-
-Use `.ejs.json5` when you need prompt values interpolated (e.g. `<%= routeName %>`). Use `$path` to target a different object path in the i18n file (default is `modules.<generator>`). Use `$remove` to remove keys from the target before merging (see below).
-
-#### Removing old translation strings
-
-To drop keys that are no longer used (e.g. when uninstalling an addon or deprecating strings), set `$remove` in the language file. It is applied to the target object before your new keys are merged. You can pass:
-
-- **Array** — top-level keys to delete: `"$remove": ["oldTitle", "deprecatedLabel"]`
-- **String** — single key: `"$remove": "oldTitle"`
-- **Object** — nested removal: use `true` to delete a key, or a nested object to remove keys inside it
-
-Example (remove two top-level keys and one nested key, then add/update others):
-
-```json5
-{
-  "$path": "modules.myAddon",
-  "$remove": {
-    "oldTitle": true,
-    "oldDescription": true,
-    "actions": { "legacySubmit": true }
-  },
-  "title": "New title",
-  "actions": { "submit": "Odoslať" }
-}
-```
-
-Example `_lang.sk.json5` (or `_lang/sk.json5`):
-
-```json5
-{
-  "$path": "modules.myAddon",
-  "title": "Názov",
-  "description": "Popis",
-  "actions": {
-    "submit": "Odoslať",
-    "cancel": "Zrušiť"
-  }
-}
-```
-
-With EJS, e.g. `_lang/en.content.ejs.json5`:
-
-```json5
-{
-  "$path": "modules.myAddon",
-  "welcome": "Welcome to <%= featureName %>"
-}
-```
-
-Skip translation application with `-nt` or `--no-translations`.
-
-## Config merge behavior
-
-The hidden config file is merged into the `modules` object in `vite.config.ts`. Remember: this is client-visible config—no secrets or server-only values (declare secrets in `src/env.ts` and import them from `$app/env/private` in server code).
-
-Supported behavior:
-
-- normal keys are merged into `modules`
-- `$remove` removes keys
-- `$navbarItems.$append` adds navbar entries without replacing existing items
-- `$navbarItems.$remove` removes navbar entries by matching the supplied fields
-- `$authItems.$append` and `$authItems.$remove` compose the logged-in user dropdown
-- `$expr("...")` injects a raw TypeScript expression instead of a quoted string
-
-Example:
-
-```json5
-{
-  auth: {
-    enabled: true,
-    provider: "github"
-  },
-  $remove: {
-    legacyAuth: true
-  }
-}
-```
-
-Navbar composition is idempotent. An appended item is skipped when an existing item already
-contains all supplied fields. Removal uses the same subset matching, so an addon can remove
-only the item it owns:
-
-```json5
-{
-  $navbarItems: {
-    $append: [{ label: "common.logout", action: "signout", show: "loggedIn" }]
-  }
-}
-```
-
-The uninstall action can use:
-
-```json5
-{
-  $navbarItems: {
-    $remove: [{ action: "signout", show: "loggedIn" }]
-  }
-}
-```
-
-Use `$authItems` instead when the entry belongs in the authenticated user dropdown:
-
-```json5
-{
-  $authItems: {
-    $append: [{ label: "common.logout", action: "signout", icon: "log-out" }]
-  }
-}
-```
-
-That removes `legacyAuth` from `modules` and adds or updates `auth`.
-
-### Raw expressions with `$expr(...)`
-
-Example:
-
-```json5
-{
-  auth: {
-    strategy: "$expr(resolveAuthStrategy())",
-    origin: "$expr(process.env.ORIGIN)"
-  }
-}
-```
-
-That is written into `vite.config.ts` as raw TypeScript expressions, not JSON strings.
-
-## Important behavior
-
-These files are never copied into the target project:
-
-- `prompt.js`
-- `_scripts.ejs.sh`
-- `_scripts.sh`
-- `_config.ejs.json5`
-- `_config.json5`
-
-Only normal Hygen templates like `*.ejs.t` produce project files.
-
-## Recommended addon action layout
-
-```text
-auth/
-  install/
+generator/install/
+    addon.json
     prompt.js
-    auth.config.ts.ejs.t
-    +page.svelte.ejs.t
-    _scripts.ejs.sh
-    _config.ejs.json5
+    page.svelte.ejs.t
+    other.ts.t
+    _scripts/_scripts.sh
+    _config/_config.json5
+    _lang/en.json5
 ```
 
-Typical flow:
+Normal `.t` templates (including `.ejs.t`) are rendered. Control files are not copied as generated output. Config and script search checks action root before the optional subfolder and uses the first supported candidate. Locale processing collects matching _lang files. The controlled renderer supports to, inject, before/after, prepend/append, at_line, eof_last, skip_if, unless_exists, force, from and message; unsupported attributes fail explicitly.
 
-1. `prompt.js` collects answers
-2. Hygen renders normal templates
-3. `_scripts*` runs automatically
-4. `_config*` is applied automatically
+### Prompts and inputs
 
-The addon runner collects prompts once and passes every answer to Hygen. Pressing Ctrl+C
-during a prompt exits cleanly with status 130 and does not continue into generation.
-
-## Example addon
-
-### prompt.js
+prompt.js exports either an array of `prompts` questions or an async function receiving `{ prompts, cwd, generator, action, repo, commit }`. It is imported only with --allow-prompts. Otherwise --answers supplies data directly. Values must be JSON-compatible and keys cannot override runner/template internals. Do not collect credentials: values can be available to subprocess environments and generated files.
 
 ```js
 export default [
-  {
-    type: 'text',
-    name: 'provider',
-    message: 'Auth provider'
-  },
-  {
-    type: 'text',
-    name: 'route',
-    message: 'Route name',
-    initial: 'auth'
-  }
+    {
+        type: 'text',
+        name: 'route',
+        message: 'Route segment',
+        initial: 'account',
+        validate: (value) => /^[a-z][a-z0-9-]*$/.test(value) || 'Use a lowercase route segment'
+    },
+    {
+        type: 'select',
+        name: 'provider',
+        message: 'Provider',
+        choices: [{ title: 'Local', value: 'local' }, { title: 'External', value: 'external' }]
+    }
 ];
 ```
 
-### `auth.config.ts.ejs.t`
-
-```text
----
-to: src/lib/auth/auth.config.ts
----
-export const authConfig = {
-  provider: "<%= provider %>",
-  route: "<%= route %>"
-};
-```
-
-### `+page.svelte.ejs.t`
+Validate data for its destination, including values supplied through --answers. The runner checks generated paths independently. Serialize strings in TypeScript output rather than inserting them into quoted literals:
 
 ```text
 ---
 to: src/routes/<%= route %>/+page.svelte
 ---
-<h1>Login via <%= provider %></h1>
+<h1>Account</h1>
 ```
 
-### `_scripts.ejs.sh`
+```text
+---
+to: src/lib/account-config.ts
+---
+export const provider = <%- JSON.stringify(provider) %>;
+```
+
+A truthy legacy runMigration answer is refused during generation. Declare migration commands separately instead of embedding auto-migration into a prompt/default.
+
+### Scripts and packages
+
+Hidden scripts are opt-in and must be plain shell source. Shell templates containing `<%` interpolation are rejected, even with --allow-scripts. Convert `_scripts.ejs.sh` into `_scripts.sh` that reads validated/quoted environment data:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-
-npm install @auth/<%= provider %>
+case "${ADDON_VAR_ROUTE:-}" in
+    account|profile) printf 'Configured route: %s\n' "$ADDON_VAR_ROUTE" ;;
+    *) printf 'Unsupported route\n' >&2; exit 1 ;;
+esac
 ```
 
-### `_config.ejs.json5`
+Context variables include ADDON_CONTEXT_JSON, ADDON_REPO, ADDON_COMMIT, ADDON_GENERATOR, ADDON_ACTION and ADDON_VAR_<UPPERCASE_NAME>. The runner passes data through environment variables, never EJS interpolation into shell source. Do not use eval or unquoted expansions in addon scripts. Explicitly permitted scripts still have full host permissions and can perform undeclared package installs or DB operations; stage flags cannot constrain arbitrary code without a sandbox.
 
-```json5
+Declare package installs in the action's static addon.json instead:
+
+```json
 {
-  auth: {
-    enabled: true,
-    provider: "<%= provider %>",
-    route: "<%= route %>"
-  },
-  $remove: {
-    legacyAuth: true
-  }
+    "version": 1,
+    "description": "Account feature",
+    "packages": {
+        "dependencies": ["zod@4.6.7"],
+        "devDependencies": []
+    },
+    "migrations": [
+        {
+            "name": "Account schema",
+            "command": "node",
+            "args": ["bin/migrate-account.mjs", "--target", "{{target}}"]
+        }
+    ]
 }
 ```
 
-## Dry run
+Use actual selected versions; only exact registry package specs are accepted (no Git/file URLs, shell strings or floating ranges). --allow-packages currently supports npm projects; other managers must use their own reviewed package commands separately. npm is invoked with an argument array, --save-exact and --ignore-scripts unless lifecycle execution was explicitly allowed. No new permission is inferred from an addon README.
 
-Use:
+### Databases and migrations
 
-```bash
-npx addon owner/repo name-of-addon action --dry-run
+A generated _migrations folder is SQL/history, not a live database connection. The starter ignores /_migrations/ and /better-auth_migrations/ by default. To commit migrations, remove only those ignore rules, review SQL plus journal/snapshot files, and stage the chosen files. To keep history private, retain the ignores and supply a private migration artifact/repository to CI; an ignored directory will not appear in a clean checkout. Never store credentials or production data in migration SQL.
+
+Configure the selected ORM's output directory explicitly, for example Drizzle `out: './_migrations'` with an existing server-side schema path and dialect. Keep DB URLs in server environment/deployment secrets; migration CLI config uses its own environment loader, not browser site config. Generate/review SQL and test it against a disposable DB before applying to the intended target. Drizzle push is a direct schema change, not equivalent to reviewed generated migration history.
+
+The manifest's migration commands run only through a separate invocation:
+
+```sh
+node bin/addon.mjs owner/repo generator install --run-migrations --migrations-only --migration-target staging
 ```
 
-This runs Hygen generation but skips hidden scripts and hidden config application.
+Add --dry-run to inspect the migration-only invocation without executing it; --commit SHA is optional here too. Every migration must have a name, executable command and string args array, including `{{target}}`. The runner substitutes the named target as a literal argument and sets ADDON_MIGRATION_TARGET; it does not interpolate a shell command. The migration program must resolve that name to its configured database and validate the target. It runs from the current project, so generate its migration files/entrypoint first. No templates, prompts, package installs, merges or hidden scripts run during migration-only execution. The command still has host permissions; inspect it and its DB mapping before execution. Keep DB credentials out of target names and command arguments.
 
-## Cache
+### Config composition
 
-Use:
+_config.json5 or _config.ejs.json5 merges into the client-visible modules block of vite.config.ts. Never include credentials or private environment values. $remove applies before merging. `$navbarItems` and `$authItems` accept $append/$remove arrays for idempotent navbar/user-menu composition; matches use the supplied fields.
 
-```bash
-npx addon owner/repo name-of-addon action --cache
+```json5
+{
+    support: { enabled: true },
+    $navbarItems: { $append: [{ label: "navbar.support", to: "/support", position: "left" }] }
+}
 ```
 
-This keeps addon sources under `.addon-cache/` so they do not need to be downloaded every time.
+Uninstall uses `$remove: [{ to: "/support" }]` under $navbarItems and module-specific $remove entries. Avoid removing other addons' items. `$expr(...)` injects raw TypeScript only with --allow-expressions; use reviewed fixed expressions, never user strings or secrets. Reserved prototype/internal wrapper keys are rejected in incoming data.
+
+### Translations
+
+Use _lang.en.json5 in the action root or _lang/en.json5. `$path` defaults to modules.<cleanedGenerator>; explicit paths target existing locale dictionaries. $remove accepts a key/string, key array or nested deletion object.
+
+```json5
+{
+    $path: "modules.support",
+    $remove: ["oldTitle"],
+    title: "Support"
+}
+```
+
+Translation writes obey destination checks. The runner prints a reminder after dictionary changes; it does **not** automatically execute typesafe-i18n or npx. After reviewing the generated diff, run the installed project's i18n:extract script yourself. Do not hand-edit generated translation types.
+
+## Compatibility with older addons
+
+Older instructions that say “install runs everything”, “dry-run runs Hygen”, “put migrations in _scripts”, or “interpolate prompt answers into _scripts.ejs.sh” are obsolete for this runner. Use --dry-run when inspection is wanted, optionally pin with --commit SHA, migrate package/DB effects to addon.json, and replace interpolated scripts with quoted environment data. Unsupported hooks fail instead of executing implicitly.
 
 ## Resources
 
