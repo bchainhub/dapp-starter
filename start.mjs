@@ -104,7 +104,8 @@ function runAsync(cmd, args = [], opts = {}) {
 			shell: args.length === 0 && opts.shell === true
 		};
 		const child = spawn(cmd, args, spawnOpts);
-		child.on('close', (code) => resolve({ status: code ?? 0 }));
+		child.on('error', (error) => resolve({ status: 1, error }));
+		child.on('close', (code, signal) => resolve({ status: code ?? (signal ? 1 : 0) }));
 	});
 }
 
@@ -274,7 +275,7 @@ function copyAdditionalTranslations(projectCwd, localeCodes) {
 		.map((e) => e.name);
 	const toCopy = localeCodes === 'all'
 		? availableLocales
-		: localeCodes.filter((code) => availableLocales.includes(code));
+		: [...new Set(['en', ...localeCodes])].filter((code) => availableLocales.includes(code));
 	const copied = [];
 	if (!fs.existsSync(destI18n)) fs.mkdirSync(destI18n, { recursive: true });
 	for (const locale of toCopy) {
@@ -728,7 +729,7 @@ async function main() {
 		// i18n types are initialized after template merge and/or additional translations (so all languages are present)
 
 		const additionalInput = await text({
-			message: 'Install additional translations from bchainhub/mota-translations?',
+			message: 'Additional translations (English is always included)?',
 			placeholder: 'es, pt-br, ja or "all" or "none"',
 			validate: (value) => {
 				const v = (value || '').trim().toLowerCase();
@@ -744,14 +745,14 @@ async function main() {
 		if (!isCancel(additionalInput)) {
 			const v = (additionalInput || '').trim().toLowerCase();
 			if (v === '' || v === 'none') {
-				additionalTranslationLocales = [];
+				additionalTranslationLocales = ['en'];
 			} else if (v === 'all') {
 				additionalTranslationLocales = ['all'];
 			} else {
-				additionalTranslationLocales = v.split(',').map((s) => s.trim()).filter(Boolean);
+				additionalTranslationLocales = [...new Set(['en', ...v.split(',').map((s) => s.trim()).filter(Boolean)])];
 			}
 		} else {
-			additionalTranslationLocales = [];
+			additionalTranslationLocales = ['en'];
 		}
 	}
 
@@ -771,46 +772,53 @@ async function main() {
 		process.exit(0);
 	}
 
-	const selections = skillChoice === 'none' ? [] : [skillChoice];
-	if (skillChoice === 'find') {
-		runNpx(['skills', 'find'], { cwd: process.cwd(), stdio: 'inherit' });
-	} else if (skillChoice === 'mota') {
-		runNpx(['skills', 'add', 'bchainhub/mota-skills'], { cwd: process.cwd(), stdio: 'inherit' });
-		for (;;) {
-			const another = await text({ message: 'Add another skill repo? (empty to finish)', placeholder: 'owner/repo' });
-			if (isCancel(another) || !another || !another.trim()) break;
-			runNpx(['skills', 'add', another.trim()], { cwd: process.cwd(), stdio: 'inherit' });
-		}
-	} else if (skillChoice === 'custom') {
-		let repo = await text({ message: 'Repo (owner/repo or URL; empty to skip)', placeholder: 'owner/repo' });
-		if (!isCancel(repo) && repo && repo.trim()) {
-			runNpx(['skills', 'add', repo.trim()], { cwd: process.cwd(), stdio: 'inherit' });
-			for (;;) {
-				repo = await text({ message: 'Another repo (empty to finish)', placeholder: '' });
-				if (isCancel(repo) || !repo || !repo.trim()) break;
-				runNpx(['skills', 'add', repo.trim()], { cwd: process.cwd(), stdio: 'inherit' });
+	const selections = [];
+	let nextSkillChoice = skillChoice;
+	while (nextSkillChoice !== 'none') {
+		let args;
+		if (nextSkillChoice === 'find') {
+			args = ['skills', 'find'];
+		} else {
+			const repo = nextSkillChoice === 'mota' ? 'bchainhub/mota-skills' : await text({
+				message: 'Skill repo (owner/repo or URL; Enter or "none" to continue)',
+				placeholder: 'owner/repo'
+			});
+			if (isCancel(repo)) {
+				cancel('Cancelled.');
+				process.exit(0);
 			}
+			if (!repo.trim() || repo.trim().toLowerCase() === 'none') break;
+			args = ['skills', 'add', repo.trim()];
+		}
+		// Let prompt cleanup finish before handing the terminal to another interactive CLI.
+		await new Promise((resolve) => setImmediate(resolve));
+		const result = await runNpxAsync(args, { cwd: process.cwd(), stdio: 'inherit' });
+		if (result.status === 0) selections.push(nextSkillChoice);
+		else log.warn(`Skills command failed (exit ${result.status}). You can retry or continue.`);
+		nextSkillChoice = await select({
+			message: 'Add another skill?',
+			options: [
+				{ value: 'none', label: 'None (continue setup)' },
+				{ value: 'mota', label: 'MOTA Skills (bchainhub/mota-skills)' },
+				{ value: 'custom', label: 'Add a repo (owner/repo or URL)' },
+				{ value: 'find', label: 'Search skills' }
+			],
+			initialValue: 'none'
+		});
+		if (isCancel(nextSkillChoice)) {
+			cancel('Cancelled.');
+			process.exit(0);
 		}
 	}
 
-	const hasSkills = skillChoice !== 'none';
+	const hasSkills = selections.length > 0;
 	let ignoreSkills = false;
 	if (hasSkills) {
 		const ignoreSkillsAnswer = await confirm({
-			message: 'Add .agents/ and skills-lock.json to .gitignore?',
+			message: 'Add .agents/ to .gitignore?',
 			initialValue: true
 		});
 		ignoreSkills = !isCancel(ignoreSkillsAnswer) && ignoreSkillsAnswer;
-		if (ignoreSkills) {
-			const gi = path.join(process.cwd(), '.gitignore');
-			let gic = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
-			if (!gic.includes('# AI Agents')) {
-				fs.appendFileSync(gi, (gic.endsWith('\n') ? '' : '\n') + '# AI Agents\n');
-			}
-			appendIfMissing(gi, '/.agents/');
-			appendIfMissing(gi, '/skills-lock.json');
-			log.success('Added .agents/ and skills-lock.json to .gitignore');
-		}
 	}
 
 	let templateMerged = false;
@@ -893,6 +901,14 @@ async function main() {
 			else if (!success) log.warn('Failed to clone or copy from mota-translations.');
 			else log.success('Additional translations done.');
 		}
+	}
+
+	// Apply after the template merge, which can replace .gitignore.
+	if (hasSkills) {
+		const gi = path.join(process.cwd(), '.gitignore');
+		ensureLineInFile(gi, '/skills-lock.json');
+		if (ignoreSkills) ensureLineInFile(gi, '/.agents/');
+		log.success('Updated skill entries in .gitignore');
 	}
 
 	if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
