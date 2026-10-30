@@ -101,6 +101,10 @@ The installer:
 6. composes a project README
 7. optionally adds translations, skills, template merge, blockchain interaction tools, license, and first commit
 
+When translations are enabled, English (`en`) is always included. Additional locale codes are added alongside it; `none` or Enter keeps English only, and `all` installs every available locale.
+
+After each skills command, choose another source or **None (continue setup)** (selected by default). Custom repository input also accepts `none` or Enter to continue. Skills commands run asynchronously with terminal input/output inherited. `/skills-lock.json` is added to `.gitignore` after the template merge; ignoring `/.agents/` is optional.
+
 Before choosing a license, the installer asks **Install Blockchain interaction toolset**:
 
 - **None** (default) — skip installation.
